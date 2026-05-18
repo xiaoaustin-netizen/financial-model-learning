@@ -362,6 +362,35 @@ section[data-testid="stSidebar"] > div { padding-top:0 !important; }
 
 /* ── Tabs ── */
 button[data-baseweb="tab"] { font-size:.82rem; font-weight:600; color:#4B5563; }
+
+/* ── Fix dollar-sign LaTeX rendering in learn tabs ── */
+.stMarkdown .katex,
+.stMarkdown .katex-html,
+.stMarkdown .katex-error {
+    background: transparent !important;
+    color: inherit !important;
+    font-size: inherit !important;
+    font-family: inherit !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+/* ── Reroll (↻) company button — light/subtle style ── */
+div[data-testid="stHorizontalBlock"] .stButton > button[kind="secondary"],
+div[data-testid="stHorizontalBlock"] .stButton > button[kind="secondary"]:focus,
+div[data-testid="stHorizontalBlock"] .stButton > button[kind="secondary"]:active {
+    background: #F9FAFB !important;
+    border: 1px solid #D1D5DB !important;
+    color: #374151 !important;
+    border-radius: 6px !important;
+    font-size: .95rem !important;
+    box-shadow: none !important;
+}
+div[data-testid="stHorizontalBlock"] .stButton > button[kind="secondary"]:hover {
+    background: #F3F4F6 !important;
+    border-color: #9CA3AF !important;
+    color: #111827 !important;
+}
 </style>""", unsafe_allow_html=True)
 
 # ── Card helpers ───────────────────────────────────────────────────────────────
