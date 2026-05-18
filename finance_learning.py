@@ -259,6 +259,33 @@ header[data-testid="stHeader"] {
 }
 .guide-line:last-child { border-bottom:none; }
 
+/* ── Reveal-answer expanders (compact, subtle) ── */
+.guide-line + [data-testid="stExpander"],
+[data-testid="stExpander"]:has(div[style*="#FEFCE8"]) {
+    margin-top:0 !important; margin-bottom:2px !important;
+}
+[data-testid="stExpander"] > details > summary {
+    font-size:.65rem !important;
+    color:#9CA3AF !important;
+    padding:2px 6px !important;
+    min-height:0 !important;
+    background:transparent !important;
+    border:1px solid #E5E7EB !important;
+    border-radius:4px !important;
+}
+[data-testid="stExpander"] > details > summary:hover {
+    color:#6B7280 !important;
+    border-color:#D1D5DB !important;
+}
+[data-testid="stExpander"] > details > summary svg {
+    width:10px !important; height:10px !important;
+}
+[data-testid="stExpander"] > details[open] > summary {
+    color:#CA8A04 !important;
+    border-color:#FDE68A !important;
+    background:#FFFBEB !important;
+}
+
 /* ── Sidebar — grey ladder ── */
 section[data-testid="stSidebar"],
 [data-testid="stSidebar"] {
@@ -574,18 +601,11 @@ def formula_grid_section(section_key, title, guidance_lines, n_rows=12,
                     f'{badge}<span style="font-size:.74rem;">{line}</span></div>',
                     unsafe_allow_html=True)
                 if reveal_lines and idx < len(reveal_lines):
-                    rk = f"rev_{section_key}_r{rn}"
-                    is_rev = st.session_state.get(rk, False)
-                    if st.button("▼ hide answer" if is_rev else "▶ show answer",
-                                 key=f"revbtn_{section_key}_r{rn}",
-                                 use_container_width=False):
-                        st.session_state[rk] = not is_rev
-                        st.rerun()
-                    if is_rev:
+                    with st.expander("show answer"):
                         st.markdown(
                             f'<div style="background:#FEFCE8;border-left:3px solid #CA8A04;'
                             f'border-radius:0 3px 3px 0;padding:5px 8px;font-size:.73rem;'
-                            f'color:#713F12;margin-bottom:3px;">{reveal_lines[idx]}</div>',
+                            f'color:#713F12;">{reveal_lines[idx]}</div>',
                             unsafe_allow_html=True)
     else:
         col_grid = st.container()
@@ -747,18 +767,11 @@ def formula_grid_multicol(section_key, title, guidance_lines, n_rows, col_labels
                     f'{badge}<span style="font-size:.74rem;">{line}</span></div>',
                     unsafe_allow_html=True)
                 if reveal_lines and idx < len(reveal_lines):
-                    rk = f"rev_{section_key}_r{rn}"
-                    is_rev = st.session_state.get(rk, False)
-                    if st.button("▼ hide answer" if is_rev else "▶ show answer",
-                                 key=f"revbtn_{section_key}_r{rn}",
-                                 use_container_width=False):
-                        st.session_state[rk] = not is_rev
-                        st.rerun()
-                    if is_rev:
+                    with st.expander("show answer"):
                         st.markdown(
                             f'<div style="background:#FEFCE8;border-left:3px solid #CA8A04;'
                             f'border-radius:0 3px 3px 0;padding:5px 8px;font-size:.73rem;'
-                            f'color:#713F12;margin-bottom:3px;">{reveal_lines[idx]}</div>',
+                            f'color:#713F12;">{reveal_lines[idx]}</div>',
                             unsafe_allow_html=True)
     else:
         col_grid = st.container()
