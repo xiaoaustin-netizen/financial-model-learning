@@ -378,6 +378,38 @@ div[data-testid="stHorizontalBlock"] .stButton > button[kind="secondary"]:hover 
     border-color: #9CA3AF !important;
     color: #111827 !important;
 }
+
+/* ── Download buttons ── */
+[data-testid="stDownloadButton"] > button {
+    border-radius: 6px !important;
+    font-size: .84rem !important;
+    font-weight: 600 !important;
+    border: none !important;
+    padding: 9px 16px !important;
+    width: 100% !important;
+}
+/* First column → Template download (blue) */
+[data-testid="stHorizontalBlock"] [data-testid="column"]:first-child
+    [data-testid="stDownloadButton"] > button {
+    background: #2563EB !important;
+    color: #FFFFFF !important;
+}
+[data-testid="stHorizontalBlock"] [data-testid="column"]:first-child
+    [data-testid="stDownloadButton"] > button:hover {
+    background: #1D4ED8 !important;
+    color: #FFFFFF !important;
+}
+/* Second column → Advanced Modeling (purple) */
+[data-testid="stHorizontalBlock"] [data-testid="column"]:nth-child(2)
+    [data-testid="stDownloadButton"] > button {
+    background: #7C3AED !important;
+    color: #FFFFFF !important;
+}
+[data-testid="stHorizontalBlock"] [data-testid="column"]:nth-child(2)
+    [data-testid="stDownloadButton"] > button:hover {
+    background: #6D28D9 !important;
+    color: #FFFFFF !important;
+}
 </style>""", unsafe_allow_html=True)
 
 # ── Card helpers ───────────────────────────────────────────────────────────────
@@ -1963,9 +1995,7 @@ _PAGE_META = {
 def page_header(page):
     title, subtitle = _PAGE_META.get(page, ("", ""))
     co = current_company()
-    inputs = _co_inputs(co).get(page)
 
-    # ── Row 1: title (left) + company badge (centre-right) + button (far right) ──
     c_title, c_co, c_btn = st.columns([5, 4, 1])
     with c_title:
         st.markdown(
@@ -1988,22 +2018,8 @@ def page_header(page):
                      use_container_width=True):
             st.session_state.company_idx = (st.session_state.company_idx + 1) % len(COMPANIES)
             st.rerun()
-
-    # ── Row 2: given inputs strip ──
-    if inputs is None:
-        inputs_list = [("Rev", co["revenue"]), ("EBITDA", co["ebitda"]),
-                       ("NI", co["ni"]), ("Price", co["price"]), ("Shares", co["shares"])]
-    else:
-        inputs_list = inputs
-    chips_html = "".join(
-        f'<span class="input-chip"><span class="input-chip-lbl">{lbl}</span>{val}</span>'
-        for lbl, val in inputs_list
-    )
-    st.markdown(
-        f'<div style="padding:6px 0 14px;border-bottom:1px solid #E5E7EB;margin-bottom:18px;">'
-        f'<div class="page-hdr-inputs-lbl">Given Inputs — use these values, do not re-derive</div>'
-        f'<div>{chips_html}</div></div>',
-        unsafe_allow_html=True)
+    st.markdown('<div style="border-bottom:1px solid #E5E7EB;margin-bottom:18px;"></div>',
+                unsafe_allow_html=True)
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
