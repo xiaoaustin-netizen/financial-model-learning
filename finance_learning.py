@@ -2,6 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re as _re
+import io
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 st.set_page_config(page_title="Financial Modeling School", layout="wide", page_icon="📈")
 
@@ -340,22 +343,6 @@ section[data-testid="stSidebar"] > div { padding-top:0 !important; }
     color:#111827 !important; font-weight:700 !important;
 }
 
-/* ── Excel formula bar ── */
-.xl-fbar-label {
-    display:flex; align-items:center; gap:8px;
-    background:#F1F5F9; border:1px solid #CBD5E1;
-    border-radius:4px 4px 0 0; padding:3px 8px;
-    font-size:.59rem; font-weight:700; letter-spacing:.1em;
-    text-transform:uppercase; color:#64748B; margin-bottom:0;
-}
-.xl-ref-chip {
-    display:inline-block; font-size:.64rem; font-weight:700;
-    font-family:'SF Mono','Fira Code',monospace;
-    background:#EFF6FF; color:#1D4ED8;
-    border:1px solid #BFDBFE; border-radius:2px;
-    padding:1px 5px; margin:1px 2px; cursor:pointer;
-}
-
 /* ── Hint rows ── */
 .hint-row { font-size:.8rem; color:#4B5563; padding:6px 0; border-bottom:1px solid #F3F4F6; }
 .hint-num { display:inline-block; width:54px; font-family:monospace; color:#9CA3AF; font-size:.71rem; }
@@ -409,6 +396,54 @@ def pro_tip(body):
 
 def given_inputs(_items, _note=""):
     pass
+
+EXCEL_LINKS = {
+    "3stmt":     "",  # Three Statement Model — paste spreadsheet URL here
+    "dcf":       "",  # DCF Model — paste spreadsheet URL here
+    "comps":     "",  # Comps — paste spreadsheet URL here
+    "precedent": "",  # Precedent Transactions — paste spreadsheet URL here
+    "lbo":       "",  # LBO Model — paste spreadsheet URL here
+    "merger":    "",  # Merger Model — paste spreadsheet URL here
+    "budget":    "",  # Budget vs. Actual — paste spreadsheet URL here
+}
+
+
+def _excel_link_tab(model_key, model_name):
+    """Render a card linking to the external Excel template for this model."""
+    url = EXCEL_LINKS.get(model_key, "")
+    st.markdown('<div style="height:16px;"></div>', unsafe_allow_html=True)
+    if url:
+        st.markdown(
+            f'<div style="background:#EFF6FF;border:1px solid #BFDBFE;'
+            f'border-left:4px solid #2563EB;border-radius:6px;'
+            f'padding:28px 36px;text-align:center;">'
+            f'<div style="font-size:.65rem;font-weight:700;letter-spacing:.18em;'
+            f'text-transform:uppercase;color:#1D4ED8;margin-bottom:10px;">Excel Template</div>'
+            f'<div style="font-size:.97rem;color:#1F2937;font-weight:600;margin-bottom:20px;">'
+            f'Build the {model_name} in Excel</div>'
+            f'<a href="{url}" target="_blank" rel="noopener noreferrer" '
+            f'style="display:inline-block;background:#2563EB;color:#FFFFFF;'
+            f'font-size:.85rem;font-weight:600;padding:11px 32px;'
+            f'border-radius:5px;text-decoration:none;">'
+            f'Open Excel Template →</a>'
+            f'</div>',
+            unsafe_allow_html=True)
+    else:
+        st.markdown(
+            f'<div style="background:#F9FAFB;border:1.5px dashed #D1D5DB;'
+            f'border-radius:6px;padding:28px 36px;text-align:center;">'
+            f'<div style="font-size:.88rem;font-weight:600;color:#374151;margin-bottom:8px;">'
+            f'Excel Template — Link Not Configured</div>'
+            f'<div style="font-size:.80rem;color:#9CA3AF;line-height:1.7;">'
+            f'Open <code style="background:#F3F4F6;padding:1px 5px;border-radius:3px;">'
+            f'finance_learning.py</code> and set the URL for '
+            f'<code style="background:#F3F4F6;padding:1px 5px;border-radius:3px;">'
+            f'{model_key}</code> in the '
+            f'<code style="background:#F3F4F6;padding:1px 5px;border-radius:3px;">EXCEL_LINKS</code>'
+            f' dict near the top of the file.</div>'
+            f'</div>',
+            unsafe_allow_html=True)
+
 
 # ── Formula engine ─────────────────────────────────────────────────────────────
 
@@ -573,18 +608,6 @@ def _get_all_cells():
     return st.session_state._all_cells
 
 
-_FN_TEMPLATES = {
-    "—  insert function  —": None,
-    "SUM(range)":        "=SUM(B1:B5)",
-    "AVERAGE(range)":    "=AVERAGE(B1:B5)",
-    "MEDIAN(range)":     "=MEDIAN(B1:B5)",
-    "IF(cond,T,F)":      "=IF(B1>0,1,0)",
-    "MAX(range)":        "=MAX(B1:B5)",
-    "MIN(range)":        "=MIN(B1:B5)",
-    "PERCENTILE(r,p)":   "=PERCENTILE(B1:B5,0.25)",
-    "SUM(B+C range)":    "=SUM(B2:B10)",
-}
-
 
 def formula_grid_section(section_key, title, guidance_lines, n_rows=12,
                           cross=None, seed=None, section_name=None, reveal_lines=None):
@@ -641,113 +664,123 @@ def formula_grid_section(section_key, title, guidance_lines, n_rows=12,
 
     with col_grid:
         ver = s["ver"]
-        active = s["active"]   # 1-based row index
         cur_b = s["b"][active - 1] if active <= len(s["b"]) else ""
+        fbar_key = f"xlfbar_{section_key}_v{ver}_r{active}"
 
-        # ── Formula bar label ───────────────────────────
-        st.markdown('<div class="xl-fbar-label">▣ Formula Bar</div>', unsafe_allow_html=True)
-
-        # ── Name-box | fx | formula input | ↵ | ↺ ──────
-        c_cell, c_fxlbl, c_fbar, c_apply, c_clr = st.columns([1, 0.25, 5.5, 0.7, 0.7])
-
-        with c_cell:
-            cell_opts = [f"B{i+1}" for i in range(n_rows)]
-            sel_cell = st.selectbox("cell", cell_opts, index=active - 1,
-                                    key=f"xlcell_{section_key}_v{ver}",
-                                    label_visibility="collapsed")
-            new_active = int(sel_cell[1:])
+        # ── Excel-style formula bar ──────────────────────────
+        # Name-box (cell selector) | formula input | ✓ commit | ↺ reset
+        cb1, cb2, cb3, cb4 = st.columns([1.1, 6.8, 0.55, 0.55])
+        with cb1:
+            sel = st.selectbox("cell", [f"B{i+1}" for i in range(n_rows)],
+                               index=active - 1, label_visibility="collapsed",
+                               key=f"xlcell_{section_key}_v{ver}")
+            new_active = int(sel[1:])
             if new_active != active:
                 s["active"] = new_active
                 st.rerun()
-
-        with c_fxlbl:
-            st.markdown('<div style="padding-top:6px;text-align:center;font-family:monospace;'
-                        'font-size:.78rem;color:#64748B;font-style:italic;">fx</div>',
-                        unsafe_allow_html=True)
-
-        with c_fbar:
+        with cb2:
             formula_input = st.text_input(
-                "formula", value=cur_b,
-                key=f"xlfbar_{section_key}_v{ver}_r{active}",
-                placeholder="Enter value or =formula (e.g. =B1+B2)",
+                "fx", value=cur_b, key=fbar_key,
+                placeholder="type a value  or  =formula …",
                 label_visibility="collapsed")
-
-        with c_apply:
-            if st.button("↵", key=f"xlapply_{section_key}_v{ver}",
-                         use_container_width=True, help="Apply formula to selected cell"):
+        with cb3:
+            if st.button("✓", key=f"xlapply_{section_key}_v{ver}",
+                         use_container_width=True, help="Commit formula to cell (Enter)"):
                 s["b"][active - 1] = formula_input
-                s["ver"] += 1
-                st.rerun()
-
-        with c_clr:
+                s["ver"] += 1; st.rerun()
+        with cb4:
             if st.button("↺", key=f"xlclr_{section_key}_v{ver}",
-                         use_container_width=True, help="Clear and reset this sheet"):
-                s["a"] = [""] * n_rows
-                s["b"] = [""] * n_rows
-                s["ver"] += 1
-                s["active"] = 1
-                st.rerun()
+                         use_container_width=True, help="Clear and reset entire sheet"):
+                s["a"] = [""] * n_rows; s["b"] = [""] * n_rows
+                s["ver"] += 1; s["active"] = 1; st.rerun()
 
-        # ── Function dropdown ────────────────────────────
-        fn_col, _ = st.columns([4, 4])
-        with fn_col:
-            fn_list = list(_FN_TEMPLATES.keys())
-            sel_fn = st.selectbox("ƒx function", fn_list,
-                                  key=f"fnsel_{section_key}_v{ver}",
-                                  label_visibility="collapsed",
-                                  help="Select a function to insert into the active cell")
-            tpl = _FN_TEMPLATES.get(sel_fn)
-            if tpl is not None:
-                s["b"][active - 1] = tpl
-                s["ver"] += 1
-                st.rerun()
+        # ── Function shortcut buttons ────────────────────────
+        # Each button appends the function call to whatever is in the formula input,
+        # or inserts a full template when the cell is empty.
+        FN_BTNS = [
+            ("SUM",     "SUM(",        "=SUM(B1:B5)"),
+            ("IF",      "IF(",         "=IF(B1>0,1,0)"),
+            ("AVG",     "AVERAGE(",    "=AVERAGE(B1:B5)"),
+            ("MAX",     "MAX(",        "=MAX(B1:B5)"),
+            ("MIN",     "MIN(",        "=MIN(B1:B5)"),
+            ("MEDIAN",  "MEDIAN(",     "=MEDIAN(B1:B5)"),
+            ("%ILE",    "PERCENTILE(", "=PERCENTILE(B1:B5,0.25)"),
+            ("IRR",     "IRR(",        "=IRR(B1:F1)"),
+        ]
+        st.markdown(
+            '<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;'
+            'text-transform:uppercase;color:#6B7280;margin:5px 0 3px;">ƒ  Functions</div>',
+            unsafe_allow_html=True)
+        fn_cols = st.columns(len(FN_BTNS))
+        for col_w, (lbl, fn_call, tpl) in zip(fn_cols, FN_BTNS):
+            with col_w:
+                if st.button(lbl, key=f"fn_{lbl}_{section_key}_v{ver}",
+                             use_container_width=True, help=f"Insert  {tpl}"):
+                    prog = str(st.session_state.get(fbar_key, cur_b) or "")
+                    s["b"][active - 1] = (prog + fn_call) if prog.startswith("=") else tpl
+                    s["ver"] += 1; st.rerun()
 
-        # ── Cell-ref chips (populated cells) ────────────
-        nonempty = [(f"B{i+1}", s["b"][i]) for i in range(n_rows)
-                    if s["b"][i] and str(s["b"][i]).strip() and i + 1 != active]
-        if nonempty:
+        # ── Click-to-reference chips ─────────────────────────
+        # Shows every populated cell; clicking appends its reference to the formula.
+        filled = [(f"B{i+1}", cell_vals.get(f"B{i+1}", ""))
+                  for i in range(n_rows) if s["b"][i] and str(s["b"][i]).strip()]
+        if filled:
             st.markdown(
-                f'<div style="font-size:.59rem;color:#94A3B8;margin:2px 0 1px;">Click ref to insert into active cell:</div>',
+                '<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;'
+                'text-transform:uppercase;color:#6B7280;margin:5px 0 3px;">↩  Click cell to add reference</div>',
                 unsafe_allow_html=True)
-            ref_cols = st.columns(min(len(nonempty), 8))
-            for i, (ref, val) in enumerate(nonempty[:8]):
+            ref_cols = st.columns(min(len(filled), 9))
+            for i, (ref, val) in enumerate(filled[:9]):
                 with ref_cols[i]:
-                    label = ref
-                    if st.button(label, key=f"xlref_{ref}_{section_key}_v{ver}",
-                                 use_container_width=True,
-                                 help=f"{ref} = {_fmt(cell_vals.get(ref, val))}"):
-                        cur = s["b"][active - 1]
-                        if not cur or not str(cur).strip().startswith("="):
-                            s["b"][active - 1] = f"={ref}"
-                        else:
-                            s["b"][active - 1] = cur + ref
-                        s["ver"] += 1
-                        st.rerun()
+                    tip = f"{ref} = {_fmt(val)}" if isinstance(val, (int, float)) else ref
+                    if st.button(ref, key=f"xlref_{ref}_{section_key}_v{ver}",
+                                 use_container_width=True, help=tip):
+                        prog = str(st.session_state.get(fbar_key, cur_b) or "")
+                        s["b"][active - 1] = (prog + ref) if prog.startswith("=") else f"={ref}"
+                        s["ver"] += 1; st.rerun()
 
-        # ── Grid ────────────────────────────────────────
+        # ── Grid — cells show computed results ───────────────
+        def _disp(i):
+            raw = s["b"][i]
+            if not raw or str(raw).strip() == "":
+                return ""
+            if str(raw).strip().startswith("="):
+                v = cell_vals.get(f"B{i+1}", "")
+                return _fmt(v) if v not in ("", None) else raw
+            return str(raw)
+
+        display_b = [_disp(i) for i in range(n_rows)]
+
         rows = []
         for i in range(n_rows):
-            b = s["b"][i]; a = s["a"][i]
-            v = cell_vals.get(f"B{i+1}", "")
-            result = _fmt(v) if (b and str(b).strip() and str(b).strip().lower() != "nan") else ""
+            a = s["a"][i]
             row_num = f"▶{i+1}" if (i + 1 == active) else str(i + 1)
-            rows.append({" ": row_num, "A": a or "", "B": b or "", "→ Result": result})
+            rows.append({" ": row_num, "A  ·  Label": a or "", "B  ·  Value": display_b[i]})
 
         df = pd.DataFrame(rows)
         ek = f"de_{section_key}_v{ver}"
         edited = st.data_editor(df, key=ek, hide_index=True, use_container_width=True,
             num_rows="fixed",
             column_config={
-                " ":          st.column_config.TextColumn(" ", disabled=True, width=32),
-                "A":          st.column_config.TextColumn("A  ·  Label", width=148),
-                "B":          st.column_config.TextColumn("B  ·  Value / Formula", width=218),
-                "→ Result":   st.column_config.TextColumn("→ Result", disabled=True, width=90),
+                " ":           st.column_config.TextColumn(" ", disabled=True, width=32),
+                "A  ·  Label": st.column_config.TextColumn("A  ·  Label", width=148),
+                "B  ·  Value": st.column_config.TextColumn("B  ·  Value", width=260),
             })
 
-        na = [("" if str(x) in ("nan","None","") else str(x)) for x in edited["A"]]
-        nb = [("" if str(x) in ("nan","None","") else str(x)) for x in edited["B"]]
-        if na != s["a"] or nb != s["b"]:
-            s["a"] = na; s["b"] = nb; s["ver"] += 1
+        na = [("" if str(x) in ("nan","None","") else str(x)) for x in edited["A  ·  Label"]]
+        nb_edited = [("" if str(x) in ("nan","None","") else str(x)) for x in edited["B  ·  Value"]]
+
+        new_b = list(s["b"])
+        any_b_changed = False
+        for i in range(n_rows):
+            if nb_edited[i] != display_b[i]:
+                new_b[i] = nb_edited[i]
+                any_b_changed = True
+
+        if na != s["a"] or any_b_changed:
+            s["a"] = na
+            s["b"] = new_b
+            s["ver"] += 1
             st.rerun()
 
 
@@ -806,11 +839,23 @@ def formula_grid_multicol(section_key, title, guidance_lines, n_rows, col_labels
         col_grid = st.container()
 
     with col_grid:
+        # Cells show computed results inline; type =formula or value directly
+        def _disp_mc(c, i):
+            raw = s["cols"][c][i]
+            if not raw or str(raw).strip() == "":
+                return ""
+            if str(raw).strip().startswith("="):
+                v = cell_vals.get(f"{c.upper()}{i+1}", "")
+                return _fmt(v) if v not in ("", None) else raw
+            return str(raw)
+
+        display_cols = {c: [_disp_mc(c, i) for i in range(n_rows)] for c in cols}
+
         rows = []
         for i in range(n_rows):
             row = {"#": str(i+1), "Label (A)": s["a"][i] or ""}
             for c, lbl in zip(cols, col_labels):
-                row[lbl] = s["cols"][c][i] or ""
+                row[lbl] = display_cols[c][i]
             rows.append(row)
         df = pd.DataFrame(rows)
 
@@ -825,38 +870,1082 @@ def formula_grid_multicol(section_key, title, guidance_lines, n_rows, col_labels
         edited = st.data_editor(df, key=ek, hide_index=True, use_container_width=True,
                                 num_rows="fixed", column_config=col_cfg)
 
-        # Show computed results below
-        result_rows = []
         na = [("" if str(x) in ("nan","None","") else str(x)) for x in edited["Label (A)"]]
-        for i in range(n_rows):
-            label = na[i]
-            if not label:
-                continue
-            row_data = {"Row label": label}
-            for c, lbl in zip(cols, col_labels):
-                v = cell_vals.get(f"{c}{i+1}", "")
-                row_data[lbl] = _fmt(v) if v != "" else ""
-            result_rows.append(row_data)
 
-        if any(any(v for k, v in r.items() if k != "Row label") for r in result_rows):
-            st.caption("↓ Computed results")
-            st.dataframe(pd.DataFrame(result_rows), hide_index=True, use_container_width=True)
-
-        # Detect changes
-        changed = na != s["a"]
-        new_cols = {}
+        # Detect changes: only update cells the user actually edited
+        any_changed = (na != s["a"])
+        new_cols = {c: list(s["cols"][c]) for c in cols}
         for c, lbl in zip(cols, col_labels):
             nc = [("" if str(x) in ("nan","None","") else str(x)) for x in edited[lbl]]
-            new_cols[c] = nc
-            if nc != s["cols"][c]:
-                changed = True
+            for i in range(n_rows):
+                if nc[i] != display_cols[c][i]:
+                    new_cols[c][i] = nc[i]
+                    any_changed = True
 
-        if changed:
+        if any_changed:
             s["a"] = na
             for c in cols:
                 s["cols"][c] = new_cols[c]
             s["ver"] += 1
             st.rerun()
+
+
+# ── Excel download helpers ──────────────────────────────────────────────────────
+
+_BLUE_FILL  = PatternFill("solid", fgColor="BFDBFE")
+_YELLOW_FILL= PatternFill("solid", fgColor="FFFBEB")
+_HDR_FILL   = PatternFill("solid", fgColor="1E3A5F")
+_SUB_FILL   = PatternFill("solid", fgColor="DBEAFE")
+_BLUE_FONT  = Font(color="1D4ED8")
+_GREEN_FONT = Font(color="065F46")
+_BOLD_FONT  = Font(bold=True)
+_BOLD_BL    = Font(bold=True, color="1E3A5F")
+_WHITE_BOLD = Font(bold=True, color="FFFFFF")
+_RIGHT_ALIGN= Alignment(horizontal="right")
+_CENTER_ALG = Alignment(horizontal="center")
+
+
+def _xl_hdr_row(ws, row, *labels):
+    for i, lbl in enumerate(labels, 1):
+        col = chr(ord("A") + i - 1)
+        c = ws[f"{col}{row}"]
+        c.value = lbl; c.font = _WHITE_BOLD
+        c.fill = _HDR_FILL; c.alignment = _CENTER_ALG
+
+
+def _xl_given(ws, row, label, value, lc="A", vc="B"):
+    ws[f"{lc}{row}"].value = label
+    ws[f"{vc}{row}"].value = value
+    ws[f"{vc}{row}"].fill = _BLUE_FILL
+    ws[f"{vc}{row}"].font = _BLUE_FONT
+    ws[f"{vc}{row}"].alignment = _RIGHT_ALIGN
+
+
+def _xl_fml(ws, row, label, formula, lc="A", vc="B"):
+    ws[f"{lc}{row}"].value = label
+    ws[f"{vc}{row}"].value = formula
+    ws[f"{vc}{row}"].font = _GREEN_FONT
+    ws[f"{vc}{row}"].alignment = _RIGHT_ALIGN
+
+
+def _xl_sub(ws, row, label, formula, lc="A", vc="B"):
+    ws[f"{lc}{row}"].value = label
+    ws[f"{lc}{row}"].font = _BOLD_BL
+    ws[f"{vc}{row}"].value = formula
+    ws[f"{vc}{row}"].font = _BOLD_BL
+    ws[f"{vc}{row}"].fill = _SUB_FILL
+    ws[f"{vc}{row}"].alignment = _RIGHT_ALIGN
+
+
+def _xl_prac(ws, row, label, value=None, lc="A", vc="B"):
+    ws[f"{lc}{row}"].value = label
+    if value is not None:
+        ws[f"{vc}{row}"].value = value
+        ws[f"{vc}{row}"].fill = _BLUE_FILL
+        ws[f"{vc}{row}"].font = _BLUE_FONT
+        ws[f"{vc}{row}"].alignment = _RIGHT_ALIGN
+    else:
+        ws[f"{vc}{row}"].fill = _YELLOW_FILL
+
+
+def _xl_sec(ws, row, label):
+    ws[f"A{row}"].value = label
+    ws[f"A{row}"].font = _BOLD_BL
+    ws[f"A{row}"].fill = _SUB_FILL
+
+
+def _cw(ws, widths):
+    for col, w in widths:
+        ws.column_dimensions[col].width = w
+
+
+def _make_3stmt_excel(wb, co):
+    R = co["rev_n"]; E = co["ebitda_n"]; N = co["ni_n"]
+    TAX = 0.30
+    cogs = round(R * 0.60, 1);  sga = round(R * 0.40 - E, 1)
+    da   = round(R * 0.06, 1);  ebit = E - da
+    interest = round(ebit - N / (1 - TAX), 1)
+    capex = round(R * 0.07, 1); divs = round(N * 0.25, 1)
+    net_debt = round(E * 1.05 / 5) * 5
+    cash = round(R*0.15,1); ar = round(R*0.12,1); inv = round(R*0.08,1)
+    ppe  = round(R*0.40,1); intang = round(R*0.10,1)
+    ap = round(R*0.06,1); st_debt = round(net_debt*0.15/5)*5
+    lt_debt = net_debt + cash - st_debt
+    tot_a = cash+ar+inv+ppe+intang; tot_l = ap+st_debt+lt_debt
+    eq = tot_a - tot_l; com_stock = round(eq*0.50,1); ret_earn = round(eq-com_stock,1)
+    nm = co["name"]
+
+    # IS — Complete
+    wc = wb.create_sheet("IS — Complete"); _cw(wc, [("A",28),("B",16)])
+    _xl_hdr_row(wc, 1, f"Income Statement — {nm}", "($M)")
+    _xl_given(wc,2,"Revenue",R); _xl_given(wc,3,"COGS",cogs)
+    _xl_sub(wc,4,"Gross Profit","=B2-B3"); _xl_given(wc,5,"SG&A",sga)
+    _xl_sub(wc,6,"EBITDA","=B4-B5"); _xl_given(wc,7,"D&A",da)
+    _xl_sub(wc,8,"EBIT","=B6-B7"); _xl_given(wc,9,"Interest Expense",interest)
+    _xl_sub(wc,10,"EBT","=B8-B9"); _xl_given(wc,11,"Tax Rate",TAX)
+    wc["B11"].number_format="0%"
+    _xl_fml(wc,12,"Tax Expense","=B10*B11"); _xl_sub(wc,13,"Net Income","=B10-B12")
+    _xl_fml(wc,14,"NI Margin","=B13/B2"); wc["B14"].number_format="0.0%"
+
+    # IS — Practice
+    wp = wb.create_sheet("IS — Practice"); _cw(wp, [("A",28),("B",16)])
+    _xl_hdr_row(wp,1,f"Income Statement — {nm}","($M)")
+    _xl_prac(wp,2,"Revenue",R); _xl_prac(wp,3,"COGS",cogs)
+    _xl_prac(wp,4,"Gross Profit"); _xl_prac(wp,5,"SG&A",sga)
+    _xl_prac(wp,6,"EBITDA"); _xl_prac(wp,7,"D&A",da)
+    _xl_prac(wp,8,"EBIT"); _xl_prac(wp,9,"Interest Expense",interest)
+    _xl_prac(wp,10,"EBT"); _xl_prac(wp,11,"Tax Rate",TAX)
+    wp["B11"].number_format="0%"
+    _xl_prac(wp,12,"Tax Expense"); _xl_prac(wp,13,"Net Income"); _xl_prac(wp,14,"NI Margin")
+
+    # BS — Complete
+    wc2 = wb.create_sheet("BS — Complete"); _cw(wc2,[("A",28),("B",16)])
+    _xl_hdr_row(wc2,1,f"Balance Sheet — {nm}","($M)")
+    _xl_given(wc2,2,"Cash",cash); _xl_given(wc2,3,"Accounts Receivable",ar)
+    _xl_given(wc2,4,"Inventory",inv); _xl_sub(wc2,5,"Current Assets","=B2+B3+B4")
+    _xl_given(wc2,6,"PP&E, net",ppe); _xl_given(wc2,7,"Intangibles",intang)
+    _xl_sub(wc2,8,"Total Assets","=B5+B6+B7")
+    _xl_given(wc2,10,"Accounts Payable",ap); _xl_given(wc2,11,"Short-term Debt",st_debt)
+    _xl_given(wc2,12,"Long-term Debt",lt_debt); _xl_sub(wc2,13,"Total Liabilities","=B10+B11+B12")
+    _xl_given(wc2,15,"Common Stock",com_stock); _xl_given(wc2,16,"Retained Earnings",ret_earn)
+    _xl_sub(wc2,17,"Total Equity","=B15+B16"); _xl_sub(wc2,18,"Total L&E","=B13+B17")
+    _xl_fml(wc2,20,"Balance Check (must = 0)","=B8-B18")
+
+    # BS — Practice
+    wp2 = wb.create_sheet("BS — Practice"); _cw(wp2,[("A",28),("B",16)])
+    _xl_hdr_row(wp2,1,f"Balance Sheet — {nm}","($M)")
+    _xl_prac(wp2,2,"Cash",cash); _xl_prac(wp2,3,"Accounts Receivable",ar)
+    _xl_prac(wp2,4,"Inventory",inv); _xl_prac(wp2,5,"Current Assets")
+    _xl_prac(wp2,6,"PP&E, net",ppe); _xl_prac(wp2,7,"Intangibles",intang)
+    _xl_prac(wp2,8,"Total Assets"); _xl_prac(wp2,10,"Accounts Payable",ap)
+    _xl_prac(wp2,11,"Short-term Debt",st_debt); _xl_prac(wp2,12,"Long-term Debt",lt_debt)
+    _xl_prac(wp2,13,"Total Liabilities"); _xl_prac(wp2,15,"Common Stock",com_stock)
+    _xl_prac(wp2,16,"Retained Earnings",ret_earn); _xl_prac(wp2,17,"Total Equity")
+    _xl_prac(wp2,18,"Total L&E"); _xl_prac(wp2,20,"Balance Check (must = 0)")
+
+    # CFS — Complete
+    wc3 = wb.create_sheet("CFS — Complete"); _cw(wc3,[("A",32),("B",16)])
+    _xl_hdr_row(wc3,1,f"Cash Flow Statement — {nm}","($M)")
+    _xl_sec(wc3,2,"— Operating Activities —")
+    _xl_fml(wc3,3,"Net Income","='IS — Complete'!B13")
+    _xl_fml(wc3,4,"Add: D&A","='IS — Complete'!B7")
+    _xl_given(wc3,5,"Δ Accounts Receivable",0); _xl_given(wc3,6,"Δ Inventory",0)
+    _xl_given(wc3,7,"Δ Accounts Payable",0)
+    _xl_sub(wc3,8,"Cash from Operations","=B3+B4+B5+B6+B7")
+    _xl_sec(wc3,10,"— Investing Activities —")
+    _xl_given(wc3,11,"Capex",-capex); _xl_sub(wc3,12,"Cash from Investing","=B11")
+    _xl_sec(wc3,14,"— Financing Activities —")
+    _xl_given(wc3,15,"Dividends Paid",-divs); _xl_sub(wc3,16,"Cash from Financing","=B15")
+    _xl_sub(wc3,18,"Ending Cash","='BS — Complete'!B2+B8+B12+B16")
+
+    # CFS — Practice
+    wp3 = wb.create_sheet("CFS — Practice"); _cw(wp3,[("A",32),("B",16)])
+    _xl_hdr_row(wp3,1,f"Cash Flow Statement — {nm}","($M)")
+    _xl_sec(wp3,2,"— Operating Activities —")
+    _xl_prac(wp3,3,"Net Income  ← link from IS tab")
+    _xl_prac(wp3,4,"Add: D&A  ← link from IS tab")
+    _xl_prac(wp3,5,"Δ Accounts Receivable",0); _xl_prac(wp3,6,"Δ Inventory",0)
+    _xl_prac(wp3,7,"Δ Accounts Payable",0); _xl_prac(wp3,8,"Cash from Operations")
+    _xl_sec(wp3,10,"— Investing Activities —")
+    _xl_prac(wp3,11,"Capex",-capex); _xl_prac(wp3,12,"Cash from Investing")
+    _xl_sec(wp3,14,"— Financing Activities —")
+    _xl_prac(wp3,15,"Dividends Paid",-divs); _xl_prac(wp3,16,"Cash from Financing")
+    _xl_prac(wp3,18,"Ending Cash  ← Beginning Cash + Ops + Investing + Financing")
+
+
+def _make_dcf_excel(wb, co):
+    R = co["rev_n"]; E = co["ebitda_n"]; S = co["shares_n"]
+    g = co.get("rev_growth",0.05); wc_r = co.get("wacc",0.0935)
+    tg = co.get("terminal_g",0.025); TAX = 0.30
+    net_debt = round(E*1.05/5)*5; nm = co["name"]
+
+    # Complete
+    wc = wb.create_sheet("DCF — Complete")
+    _cw(wc,[("A",30),("B",13),("C",12),("D",12),("E",12),("F",12),("G",12)])
+    _xl_hdr_row(wc,1,f"DCF — {nm}","Assumptions","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    _xl_sec(wc,3,"Assumptions (col B)")
+    _xl_given(wc,4,"Base Revenue ($M)",R); _xl_given(wc,5,"Revenue Growth",g)
+    wc["B5"].number_format="0.0%"
+    _xl_given(wc,6,"EBITDA Margin",round(E/R,4)); wc["B6"].number_format="0.0%"
+    _xl_given(wc,7,"D&A % Revenue",0.06); wc["B7"].number_format="0.0%"
+    _xl_given(wc,8,"Capex % Revenue",0.07); wc["B8"].number_format="0.0%"
+    _xl_given(wc,9,"Tax Rate",TAX); wc["B9"].number_format="0%"
+    _xl_given(wc,10,"WACC",wc_r); wc["B10"].number_format="0.00%"
+    _xl_given(wc,11,"Terminal Growth (g)",tg); wc["B11"].number_format="0.0%"
+    _xl_given(wc,12,"Net Debt ($M)",net_debt); _xl_given(wc,13,"Shares Out. (M)",S)
+    _xl_sec(wc,15,"5-Year Projections (cols C–G)")
+    for lbl,r in [("Revenue ($M)",16),("EBITDA ($M)",17),("Free Cash Flow ($M)",18),
+                  ("Discount Factor",19),("PV of FCF ($M)",20)]:
+        wc[f"A{r}"].value = lbl; wc[f"A{r}"].font = _BOLD_FONT
+    for yr,col in enumerate(["C","D","E","F","G"],1):
+        wc[f"{col}16"].value=f"=$B$4*(1+$B$5)^{yr}"; wc[f"{col}16"].font=_GREEN_FONT
+        wc[f"{col}17"].value=f"={col}16*$B$6"; wc[f"{col}17"].font=_GREEN_FONT
+        wc[f"{col}18"].value=f"={col}17*(1-$B$9)-{col}16*$B$8"; wc[f"{col}18"].font=_GREEN_FONT
+        wc[f"{col}19"].value=f"=1/(1+$B$10)^{yr}"; wc[f"{col}19"].font=_GREEN_FONT
+        wc[f"{col}20"].value=f"={col}18*{col}19"; wc[f"{col}20"].font=_GREEN_FONT
+    _xl_sec(wc,22,"Terminal Value & Bridge (col B)")
+    _xl_fml(wc,23,"Year 5 FCF ($M)","=G18")
+    _xl_fml(wc,24,"Terminal Value ($M)","=B23*(1+B11)/(B10-B11)")
+    _xl_fml(wc,25,"PV of Terminal Value","=B24/(1+B10)^5")
+    _xl_fml(wc,26,"Sum of PV(FCFs)","=SUM(C20:G20)")
+    _xl_sub(wc,27,"Enterprise Value ($M)","=B25+B26")
+    _xl_given(wc,28,"Net Debt ($M)",net_debt)
+    _xl_sub(wc,29,"Equity Value ($M)","=B27-B28")
+    _xl_sub(wc,30,"Implied Share Price","=B29/B13")
+    wc["B30"].number_format='"$"#,##0.00'
+
+    # Practice
+    wp = wb.create_sheet("DCF — Practice")
+    _cw(wp,[("A",30),("B",13),("C",12),("D",12),("E",12),("F",12),("G",12)])
+    _xl_hdr_row(wp,1,f"DCF — {nm}","Assumptions","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    _xl_sec(wp,3,"Assumptions (col B)")
+    _xl_prac(wp,4,"Base Revenue ($M)",R); _xl_prac(wp,5,"Revenue Growth",g)
+    _xl_prac(wp,6,"EBITDA Margin",round(E/R,4)); _xl_prac(wp,7,"D&A % Revenue",0.06)
+    _xl_prac(wp,8,"Capex % Revenue",0.07); _xl_prac(wp,9,"Tax Rate",TAX)
+    _xl_prac(wp,10,"WACC",wc_r); _xl_prac(wp,11,"Terminal Growth (g)",tg)
+    _xl_prac(wp,12,"Net Debt ($M)",net_debt); _xl_prac(wp,13,"Shares Out. (M)",S)
+    _xl_sec(wp,15,"5-Year Projections (cols C–G)")
+    for lbl,r in [("Revenue ($M)",16),("EBITDA ($M)",17),("Free Cash Flow ($M)",18),
+                  ("Discount Factor",19),("PV of FCF ($M)",20)]:
+        wp[f"A{r}"].value = lbl; wp[f"A{r}"].font = _BOLD_FONT
+        for col in ["C","D","E","F","G"]:
+            wp[f"{col}{r}"].fill = _YELLOW_FILL
+    _xl_sec(wp,22,"Terminal Value & Bridge (col B)")
+    for lbl,r,val in [("Year 5 FCF ($M)",23,None),("Terminal Value ($M)",24,None),
+                       ("PV of Terminal Value",25,None),("Sum of PV(FCFs)",26,None),
+                       ("Enterprise Value ($M)",27,None),("Net Debt ($M)",28,net_debt),
+                       ("Equity Value ($M)",29,None),("Implied Share Price",30,None)]:
+        if val is not None:
+            _xl_prac(wp,r,lbl,val)
+        else:
+            _xl_prac(wp,r,lbl)
+
+
+def _make_comps_excel(wb, co):
+    E = co["ebitda_n"]; S = co["shares_n"]; nm = co["name"]
+    net_debt = round(E*1.05/5)*5
+    peers = [("TechAlpha",1104,120,480,65,1202),("DataCore",810,100,420,50,810),
+             ("CloudSystems",1260,120,400,59,1239),("InfoPro",858,110,510,54,853)]
+
+    # Complete
+    wc = wb.create_sheet("Comps — Complete")
+    _cw(wc,[("A",20),("B",12),("C",12),("D",12),("E",13),("F",12),("G",12),("H",12)])
+    _xl_hdr_row(wc,1,"Company","EV ($M)","EBITDA ($M)","Revenue ($M)","Net Inc ($M)","Mkt Cap ($M)","EV/EBITDA","EV/Revenue")
+    for i,(pnm,ev,ebitda,rev,ni,mktcap) in enumerate(peers,2):
+        wc[f"A{i}"].value=pnm
+        for col,val in zip(["B","C","D","E","F"],[ev,ebitda,rev,ni,mktcap]):
+            wc[f"{col}{i}"].value=val; wc[f"{col}{i}"].fill=_BLUE_FILL; wc[f"{col}{i}"].font=_BLUE_FONT
+        wc[f"G{i}"].value=f"=B{i}/C{i}"; wc[f"G{i}"].font=_GREEN_FONT; wc[f"G{i}"].number_format='0.0"×"'
+        wc[f"H{i}"].value=f"=B{i}/D{i}"; wc[f"H{i}"].font=_GREEN_FONT; wc[f"H{i}"].number_format='0.0"×"'
+    _xl_sec(wc,7,"Statistics")
+    for lbl,r,pct in [("25th Pctile",8,0.25),("Median",9,0.5),("75th Pctile",10,0.75)]:
+        wc[f"A{r}"].value=lbl; wc[f"A{r}"].font=_BOLD_BL
+        wc[f"G{r}"].value=f"=MEDIAN(G2:G5)" if pct==0.5 else f"=PERCENTILE(G2:G5,{pct})"
+        wc[f"G{r}"].font=_BOLD_BL; wc[f"G{r}"].fill=_SUB_FILL; wc[f"G{r}"].number_format='0.0"×"'
+        wc[f"H{r}"].value=f"=MEDIAN(H2:H5)" if pct==0.5 else f"=PERCENTILE(H2:H5,{pct})"
+        wc[f"H{r}"].font=_BOLD_BL; wc[f"H{r}"].fill=_SUB_FILL; wc[f"H{r}"].number_format='0.0"×"'
+    _xl_sec(wc,12,f"Implied Valuation — {nm}")
+    _xl_given(wc,13,f"{nm} EBITDA ($M)",E); _xl_fml(wc,14,"Median EV/EBITDA","=G9")
+    _xl_sub(wc,15,"Implied EV ($M)","=B13*B14"); _xl_given(wc,16,"Net Debt ($M)",net_debt)
+    _xl_sub(wc,17,"Equity Value ($M)","=B15-B16"); _xl_given(wc,18,"Shares Out. (M)",S)
+    _xl_sub(wc,19,"Implied Share Price","=B17/B18"); wc["B19"].number_format='"$"#,##0.00'
+
+    # Practice
+    wp = wb.create_sheet("Comps — Practice")
+    _cw(wp,[("A",20),("B",12),("C",12),("D",12),("E",13),("F",12),("G",12),("H",12)])
+    _xl_hdr_row(wp,1,"Company","EV ($M)","EBITDA ($M)","Revenue ($M)","Net Inc ($M)","Mkt Cap ($M)","EV/EBITDA","EV/Revenue")
+    for i,(pnm,ev,ebitda,rev,ni,mktcap) in enumerate(peers,2):
+        wp[f"A{i}"].value=pnm
+        for col,val in zip(["B","C","D","E","F"],[ev,ebitda,rev,ni,mktcap]):
+            wp[f"{col}{i}"].value=val; wp[f"{col}{i}"].fill=_BLUE_FILL; wp[f"{col}{i}"].font=_BLUE_FONT
+        wp[f"G{i}"].fill=_YELLOW_FILL; wp[f"H{i}"].fill=_YELLOW_FILL
+    _xl_sec(wp,7,"Statistics")
+    for lbl,r in [("25th Pctile",8),("Median",9),("75th Pctile",10)]:
+        wp[f"A{r}"].value=lbl; wp[f"A{r}"].font=_BOLD_BL
+        wp[f"G{r}"].fill=_YELLOW_FILL; wp[f"H{r}"].fill=_YELLOW_FILL
+    _xl_sec(wp,12,f"Implied Valuation — {nm}")
+    _xl_prac(wp,13,f"{nm} EBITDA ($M)",E); _xl_prac(wp,14,"Median EV/EBITDA")
+    _xl_prac(wp,15,"Implied EV ($M)"); _xl_prac(wp,16,"Net Debt ($M)",net_debt)
+    _xl_prac(wp,17,"Equity Value ($M)"); _xl_prac(wp,18,"Shares Out. (M)",S)
+    _xl_prac(wp,19,"Implied Share Price")
+
+
+def _make_precedent_excel(wb, co):
+    E = co["ebitda_n"]; S = co["shares_n"]; nm = co["name"]
+    net_debt = round(E*1.05/5)*5
+    deals = [("AcquireCo / TechAlpha '22",1320,120,975,2022),
+             ("MegaCorp / DataCore '21",980,100,809,2021),
+             ("GlobalTech / InfoPro '23",1045,110,856,2023)]
+
+    # Complete
+    wc = wb.create_sheet("Precedent — Complete")
+    _cw(wc,[("A",28),("B",8),("C",13),("D",14),("E",13),("F",16)])
+    _xl_hdr_row(wc,1,"Deal","Year","Deal EV ($M)","LTM EBITDA ($M)","EV/EBITDA","Pre-deal Mkt Cap ($M)")
+    for i,(dnm,ev,ebitda,predeal,yr) in enumerate(deals,2):
+        wc[f"A{i}"].value=dnm
+        for col,val in zip(["B","C","D","F"],[yr,ev,ebitda,predeal]):
+            wc[f"{col}{i}"].value=val; wc[f"{col}{i}"].fill=_BLUE_FILL; wc[f"{col}{i}"].font=_BLUE_FONT
+        wc[f"E{i}"].value=f"=C{i}/D{i}"; wc[f"E{i}"].font=_GREEN_FONT; wc[f"E{i}"].number_format='0.0"×"'
+    _xl_sec(wc,6,"Statistics")
+    wc["A7"].value="Median EV/EBITDA"; wc["A7"].font=_BOLD_BL
+    wc["E7"].value="=MEDIAN(E2:E4)"; wc["E7"].font=_BOLD_BL
+    wc["E7"].fill=_SUB_FILL; wc["E7"].number_format='0.0"×"'
+    _xl_sec(wc,9,f"Implied Valuation — {nm}")
+    _xl_given(wc,10,f"{nm} LTM EBITDA ($M)",E); _xl_fml(wc,11,"Median Deal Multiple","=E7")
+    _xl_sub(wc,12,"Implied EV ($M)","=B10*B11"); _xl_given(wc,13,"Net Debt ($M)",net_debt)
+    _xl_sub(wc,14,"Equity Value ($M)","=B12-B13"); _xl_given(wc,15,"Shares Out. (M)",S)
+    _xl_sub(wc,16,"Implied Share Price","=B14/B15"); wc["B16"].number_format='"$"#,##0.00'
+
+    # Practice
+    wp = wb.create_sheet("Precedent — Practice")
+    _cw(wp,[("A",28),("B",8),("C",13),("D",14),("E",13),("F",16)])
+    _xl_hdr_row(wp,1,"Deal","Year","Deal EV ($M)","LTM EBITDA ($M)","EV/EBITDA","Pre-deal Mkt Cap ($M)")
+    for i,(dnm,ev,ebitda,predeal,yr) in enumerate(deals,2):
+        wp[f"A{i}"].value=dnm
+        for col,val in zip(["B","C","D","F"],[yr,ev,ebitda,predeal]):
+            wp[f"{col}{i}"].value=val; wp[f"{col}{i}"].fill=_BLUE_FILL; wp[f"{col}{i}"].font=_BLUE_FONT
+        wp[f"E{i}"].fill=_YELLOW_FILL
+    _xl_sec(wp,6,"Statistics")
+    wp["A7"].value="Median EV/EBITDA"; wp["A7"].font=_BOLD_BL; wp["E7"].fill=_YELLOW_FILL
+    _xl_sec(wp,9,f"Implied Valuation — {nm}")
+    _xl_prac(wp,10,f"{nm} LTM EBITDA ($M)",E); _xl_prac(wp,11,"Median Deal Multiple")
+    _xl_prac(wp,12,"Implied EV ($M)"); _xl_prac(wp,13,"Net Debt ($M)",net_debt)
+    _xl_prac(wp,14,"Equity Value ($M)"); _xl_prac(wp,15,"Shares Out. (M)",S)
+    _xl_prac(wp,16,"Implied Share Price")
+
+
+def _make_lbo_excel(wb, co):
+    E = co["ebitda_n"]; nm = co["name"]; TAX = 0.30
+    capex = round(co["rev_n"]*0.07,1); g = co.get("rev_growth",0.05)
+    ir = 0.07; entry_m = 9.0
+
+    # Complete
+    wc = wb.create_sheet("LBO — Complete")
+    _cw(wc,[("A",28),("B",13),("C",12),("D",12),("E",12),("F",12),("G",12)])
+    _xl_hdr_row(wc,1,f"LBO — {nm}","Entry","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    _xl_sec(wc,2,"Sources & Uses")
+    _xl_given(wc,3,"LTM EBITDA ($M)",E); _xl_given(wc,4,"Entry EV/EBITDA",entry_m)
+    _xl_sub(wc,5,"Entry EV ($M)","=B3*B4")
+    _xl_fml(wc,6,"Debt (60%)","=B5*0.60"); _xl_fml(wc,7,"PE Equity (40%)","=B5*0.40")
+    _xl_fml(wc,8,"Sources Check","=B6+B7")
+    _xl_sec(wc,10,"Debt Schedule")
+    _xl_hdr_row(wc,11,"","Entry","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    for lbl,r in [("Beginning Debt",12),("Interest Expense",13),("EBITDA",14),
+                  ("FCF for Paydown",15),("Ending Debt",16)]:
+        wc[f"A{r}"].value=lbl
+    # Entry col (B): show initial debt
+    wc["B12"].value="=B6"; wc["B12"].font=_GREEN_FONT
+    for yr,col in enumerate(["C","D","E","F","G"],1):
+        prev = "B" if yr==1 else chr(ord(col)-1)
+        wc[f"{col}12"].value=f"={prev}{'6' if yr==1 else '16'}"; wc[f"{col}12"].font=_GREEN_FONT
+        wc[f"{col}13"].value=f"={col}12*{ir}"; wc[f"{col}13"].font=_GREEN_FONT
+        wc[f"{col}14"].value=f"=B3*(1+{g})^{yr}"; wc[f"{col}14"].font=_GREEN_FONT
+        wc[f"{col}15"].value=f"={col}14*(1-{TAX})-{capex}"; wc[f"{col}15"].font=_GREEN_FONT
+        wc[f"{col}16"].value=f"={col}12-{col}15"; wc[f"{col}16"].font=_GREEN_FONT
+    _xl_sec(wc,18,"Exit & Returns")
+    _xl_given(wc,19,"Exit EV/EBITDA",entry_m)
+    _xl_fml(wc,20,"Year 5 EBITDA ($M)",f"=B3*(1+{g})^5")
+    _xl_sub(wc,21,"Exit EV ($M)","=B19*B20"); _xl_fml(wc,22,"Remaining Debt ($M)","=G16")
+    _xl_sub(wc,23,"Exit Equity ($M)","=B21-B22"); _xl_fml(wc,24,"Entry Equity ($M)","=B7")
+    _xl_sub(wc,25,"MOIC","=B23/B24"); wc["B25"].number_format='0.00"×"'
+
+    # Practice
+    wp = wb.create_sheet("LBO — Practice")
+    _cw(wp,[("A",28),("B",13),("C",12),("D",12),("E",12),("F",12),("G",12)])
+    _xl_hdr_row(wp,1,f"LBO — {nm}","Entry","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    _xl_sec(wp,2,"Sources & Uses")
+    _xl_prac(wp,3,"LTM EBITDA ($M)",E); _xl_prac(wp,4,"Entry EV/EBITDA",entry_m)
+    _xl_prac(wp,5,"Entry EV ($M)"); _xl_prac(wp,6,"Debt (60%)")
+    _xl_prac(wp,7,"PE Equity (40%)"); _xl_prac(wp,8,"Sources Check")
+    _xl_sec(wp,10,"Debt Schedule")
+    _xl_hdr_row(wp,11,"","Entry","Yr 1","Yr 2","Yr 3","Yr 4","Yr 5")
+    for lbl,r in [("Beginning Debt",12),("Interest Expense",13),("EBITDA",14),
+                  ("FCF for Paydown",15),("Ending Debt",16)]:
+        wp[f"A{r}"].value=lbl
+        for col in ["B","C","D","E","F","G"]:
+            wp[f"{col}{r}"].fill=_YELLOW_FILL
+    _xl_sec(wp,18,"Exit & Returns")
+    _xl_prac(wp,19,"Exit EV/EBITDA",entry_m); _xl_prac(wp,20,"Year 5 EBITDA ($M)")
+    _xl_prac(wp,21,"Exit EV ($M)"); _xl_prac(wp,22,"Remaining Debt ($M)")
+    _xl_prac(wp,23,"Exit Equity ($M)"); _xl_prac(wp,24,"Entry Equity ($M)")
+    _xl_prac(wp,25,"MOIC")
+
+
+def _make_merger_excel(wb, co):
+    N = co["ni_n"]; P = co["price_n"]; S = co["shares_n"]; nm = co["name"]
+    tgt_price = round(P*0.60,2); tgt_shares = round(S*0.40,1)
+    tgt_ni = round(N*0.35,1); syn = round(N*0.08,1); amort = round(N*0.04,1)
+
+    # Complete
+    wc = wb.create_sheet("Merger — Complete"); _cw(wc,[("A",32),("B",14)])
+    _xl_sec(wc,1,"Deal Assumptions")
+    _xl_given(wc,2,"Target Market Price",tgt_price); wc["B2"].number_format='"$"#,##0.00'
+    _xl_given(wc,3,"Acquisition Premium",0.25); wc["B3"].number_format="0%"
+    _xl_sub(wc,4,"Offer Price / Share","=B2*(1+B3)"); wc["B4"].number_format='"$"#,##0.00'
+    _xl_given(wc,5,"Target Shares Out. (M)",tgt_shares)
+    _xl_sub(wc,6,"Total Deal Value ($M)","=B4*B5")
+    _xl_given(wc,7,f"{nm} Share Price",P); wc["B7"].number_format='"$"#,##0.00'
+    _xl_fml(wc,8,"New Shares Issued (M)","=B6/B7")
+    _xl_fml(wc,9,"Dilution %",f"=B8/(B8+{S})"); wc["B9"].number_format="0.0%"
+    _xl_sec(wc,11,"Pro Forma Income Statement")
+    _xl_given(wc,12,f"Acquirer NI — {nm} ($M)",N); _xl_given(wc,13,"Target NI ($M)",tgt_ni)
+    _xl_given(wc,14,"After-tax Synergies ($M)",syn)
+    _xl_given(wc,15,"Intangibles Amortization ($M)",-amort)
+    _xl_sub(wc,16,"Pro Forma NI ($M)","=SUM(B12:B15)")
+    _xl_sec(wc,18,"EPS & Accretion / Dilution")
+    _xl_given(wc,19,"Standalone Shares (M)",S)
+    _xl_fml(wc,20,"New Shares Issued (M)","=B8"); _xl_sub(wc,21,"Pro Forma Shares (M)","=B19+B20")
+    _xl_fml(wc,22,"Standalone EPS",f"=B12/B19"); wc["B22"].number_format='"$"#,##0.00'
+    _xl_fml(wc,23,"Pro Forma EPS","=B16/B21"); wc["B23"].number_format='"$"#,##0.00'
+    _xl_sub(wc,24,"Accretion / (Dilution)","=(B23-B22)/B22"); wc["B24"].number_format="0.0%"
+
+    # Practice
+    wp = wb.create_sheet("Merger — Practice"); _cw(wp,[("A",32),("B",14)])
+    _xl_sec(wp,1,"Deal Assumptions")
+    _xl_prac(wp,2,"Target Market Price",tgt_price); _xl_prac(wp,3,"Acquisition Premium",0.25)
+    _xl_prac(wp,4,"Offer Price / Share"); _xl_prac(wp,5,"Target Shares Out. (M)",tgt_shares)
+    _xl_prac(wp,6,"Total Deal Value ($M)"); _xl_prac(wp,7,f"{nm} Share Price",P)
+    _xl_prac(wp,8,"New Shares Issued (M)"); _xl_prac(wp,9,"Dilution %")
+    _xl_sec(wp,11,"Pro Forma Income Statement")
+    _xl_prac(wp,12,f"Acquirer NI — {nm} ($M)",N); _xl_prac(wp,13,"Target NI ($M)",tgt_ni)
+    _xl_prac(wp,14,"After-tax Synergies ($M)",syn)
+    _xl_prac(wp,15,"Intangibles Amortization ($M)",-amort)
+    _xl_prac(wp,16,"Pro Forma NI ($M)")
+    _xl_sec(wp,18,"EPS & Accretion / Dilution")
+    _xl_prac(wp,19,"Standalone Shares (M)",S); _xl_prac(wp,20,"New Shares Issued (M)")
+    _xl_prac(wp,21,"Pro Forma Shares (M)"); _xl_prac(wp,22,"Standalone EPS")
+    _xl_prac(wp,23,"Pro Forma EPS"); _xl_prac(wp,24,"Accretion / (Dilution)")
+
+
+def _make_budget_excel(wb, co):
+    R = co["rev_n"]; E = co["ebitda_n"]; nm = co["name"]
+    cogs = round(R*0.60,1); sga = round(R*0.40-E,1)
+    UB,UA = 12_000,11_500
+    rb = round(R*0.24,1); ra = round(rb*0.942,1)
+    cb = round(cogs*0.24,1); ca = round(cb*0.976,1)
+    sb = round(sga*0.25,1); sa = round(sb*1.075,1)
+    pb = round(rb*1e6/UB); pa = round(ra*1e6/UA)
+
+    # Complete
+    wc = wb.create_sheet("BvA — Complete")
+    _cw(wc,[("A",20),("B",12),("C",12),("D",13),("E",12),("F",6)])
+    _xl_hdr_row(wc,1,f"Budget vs. Actual — {nm} Q1","Budget ($M)","Actual ($M)","Variance $","Variance %","F/U")
+    data = [(2,"Revenue",rb,ra,True),(3,"COGS",cb,ca,False),
+            (4,"Gross Profit",None,None,True),(5,"SG&A",sb,sa,False),
+            (6,"EBITDA",None,None,True)]
+    for r,lbl,bv,av,fav in data:
+        wc[f"A{r}"].value=lbl
+        if bv is not None:
+            wc[f"B{r}"].value=bv; wc[f"B{r}"].fill=_BLUE_FILL; wc[f"B{r}"].font=_BLUE_FONT
+            wc[f"C{r}"].value=av; wc[f"C{r}"].fill=_BLUE_FILL; wc[f"C{r}"].font=_BLUE_FONT
+        else:
+            gp_fml = ("=B2-B3","=C2-C3") if lbl=="Gross Profit" else ("=B4-B5","=C4-C5")
+            wc[f"B{r}"].value=gp_fml[0]; wc[f"B{r}"].font=_GREEN_FONT
+            wc[f"C{r}"].value=gp_fml[1]; wc[f"C{r}"].font=_GREEN_FONT
+        wc[f"D{r}"].value=f"=C{r}-B{r}"; wc[f"D{r}"].font=_GREEN_FONT
+        wc[f"E{r}"].value=f"=D{r}/B{r}"; wc[f"E{r}"].font=_GREEN_FONT
+        wc[f"E{r}"].number_format="0.0%"
+        flag=f'=IF(D{r}>=0,"F","U")' if fav else f'=IF(D{r}<=0,"F","U")'
+        wc[f"F{r}"].value=flag; wc[f"F{r}"].font=_GREEN_FONT
+    _xl_sec(wc,8,"Volume / Price Decomposition")
+    _xl_given(wc,9,"Budget Units",UB); _xl_given(wc,10,"Actual Units",UA)
+    _xl_given(wc,11,"Budget Price/Unit ($)",pb); _xl_given(wc,12,"Actual Price/Unit ($)",pa)
+    _xl_fml(wc,13,"Volume Effect ($M)","=(B10-B9)*B11/1000000")
+    _xl_fml(wc,14,"Price Effect ($M)","=B10*(B12-B11)/1000000")
+    _xl_sub(wc,15,"Check (= Revenue Variance)","=B13+B14")
+
+    # Practice
+    wp = wb.create_sheet("BvA — Practice")
+    _cw(wp,[("A",20),("B",12),("C",12),("D",13),("E",12),("F",6)])
+    _xl_hdr_row(wp,1,f"Budget vs. Actual — {nm} Q1","Budget ($M)","Actual ($M)","Variance $","Variance %","F/U")
+    for r,lbl,bv,av,_ in data:
+        wp[f"A{r}"].value=lbl
+        if bv is not None:
+            wp[f"B{r}"].value=bv; wp[f"B{r}"].fill=_BLUE_FILL; wp[f"B{r}"].font=_BLUE_FONT
+            wp[f"C{r}"].value=av; wp[f"C{r}"].fill=_BLUE_FILL; wp[f"C{r}"].font=_BLUE_FONT
+        else:
+            wp[f"B{r}"].fill=_YELLOW_FILL; wp[f"C{r}"].fill=_YELLOW_FILL
+        for col in ["D","E","F"]:
+            wp[f"{col}{r}"].fill=_YELLOW_FILL
+    _xl_sec(wp,8,"Volume / Price Decomposition")
+    _xl_prac(wp,9,"Budget Units",UB); _xl_prac(wp,10,"Actual Units",UA)
+    _xl_prac(wp,11,"Budget Price/Unit ($)",pb); _xl_prac(wp,12,"Actual Price/Unit ($)",pa)
+    _xl_prac(wp,13,"Volume Effect ($M)"); _xl_prac(wp,14,"Price Effect ($M)")
+    _xl_prac(wp,15,"Check (= Revenue Variance)")
+
+
+def make_model_excel(model_key, co):
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    {"3stmt": _make_3stmt_excel, "dcf": _make_dcf_excel, "comps": _make_comps_excel,
+     "precedent": _make_precedent_excel, "lbo": _make_lbo_excel,
+     "merger": _make_merger_excel, "budget": _make_budget_excel
+    }[model_key](wb, co)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return buf
+
+
+def _fs(ws, r, lbl, val=None, ind=0, bold=False, ul=False, hdr=False, note=False):
+    """Write one row of a formatted financial statement."""
+    ws[f"A{r}"].value = ("    " * ind) + lbl
+    if hdr:
+        ws[f"A{r}"].font = Font(bold=True, size=9)
+        ws[f"A{r}"].fill = PatternFill("solid", fgColor="E2E8F0")
+    elif note:
+        ws[f"A{r}"].font = Font(size=8, italic=True, color="94A3B8")
+    else:
+        ws[f"A{r}"].font = Font(bold=bold, size=9)
+    if val is not None:
+        ws[f"B{r}"].value = val
+        ws[f"B{r}"].number_format = '#,##0.0'
+        ws[f"B{r}"].alignment = _RIGHT_ALIGN
+        ws[f"B{r}"].font = Font(bold=bold or hdr, size=9, color="94A3B8" if note else "000000")
+        if ul:
+            ws[f"B{r}"].border = Border(bottom=Side(style="thin", color="374151"))
+        if hdr:
+            ws[f"B{r}"].fill = PatternFill("solid", fgColor="E2E8F0")
+
+
+def _fs_title(ws, r, text, sub=False):
+    ws[f"A{r}"].value = text
+    ws[f"A{r}"].font = Font(bold=not sub, size=11 if not sub else 9,
+                             color="1E3A5F" if not sub else "6B7280",
+                             italic=sub)
+
+
+def _adv_header(ws, r, nm):
+    """Instruction banner at top of every Advanced sheet."""
+    ws[f"A{r}"].value = (
+        "ADVANCED MODELING  —  Read the full financial statements below. "
+        "Extract only the figures your model requires, then build the model entirely from scratch on a new sheet.")
+    ws[f"A{r}"].font = Font(bold=True, size=9, color="FFFFFF")
+    ws[f"A{r}"].fill = PatternFill("solid", fgColor="7C3AED")
+    ws.merge_cells(f"A{r}:C{r}")
+    ws[f"A{r}"].alignment = Alignment(wrap_text=True)
+    ws.row_dimensions[r].height = 30
+
+
+def _make_adv_3stmt(wb, co):
+    R=co["rev_n"]; E=co["ebitda_n"]; N=co["ni_n"]; nm=co["name"]; S=co["shares_n"]
+    TAX=0.30
+    cogs=round(R*.60,1); gp=round(R-cogs,1); sga=round(R*.40-E,1); da=round(R*.06,1)
+    ebit=E-da; ebt=round(N/(1-TAX),1); interest_net=round(ebit-ebt,1); tax=round(ebt*TAX,1)
+    capex=round(R*.07,1); divs=round(N*.25,1); nd=round(E*1.05/5)*5
+    # IS sub-items
+    prod_rev=round(R*.70,1); svc_rev=round(R-prod_rev,1)
+    cogs_prod=round(cogs*.80,1); cogs_svc=round(cogs-cogs_prod,1)
+    rd=round(sga*.40,1); sm=round(sga*.35,1); ga=round(sga-rd-sm,1)
+    int_inc=round(ebt*.02,1); int_exp=round(interest_net+int_inc,1)
+    # BS (real company has extra line items)
+    cash_cce=round(R*.13,1); cash_stinv=round(R*.02,1); cash_tot=cash_cce+cash_stinv
+    ar=round(R*.12,1); inv=round(R*.08,1)
+    prepaid=round(R*.017,1); tax_rec=round(R*.006,1)
+    curr_a=round(cash_tot+ar+inv+prepaid+tax_rec,1)
+    ppe=round(R*.40,1); goodwill=round(R*.03,1); intang=round(R*.10,1); other_lta=round(R*.01,1)
+    tot_a=round(curr_a+ppe+goodwill+intang+other_lta,1)
+    ap=round(R*.06,1); std=round(nd*.15/5)*5; ltd=nd+cash_tot-std
+    accrued=round(R*.016,1); oth_acc=round(R*.008,1); tax_pay=round(R*.005,1)
+    curr_l=round(ap+std+accrued+oth_acc+tax_pay,1)
+    def_rev=round(R*.010,1); oth_ltl=round(R*.006,1); tot_l=round(curr_l+ltd+def_rev+oth_ltl,1)
+    tot_eq=round(tot_a-tot_l,1); aoci=round(-R*.004,1)
+    cs=round((tot_eq-aoci)*.52,1); re=round(tot_eq-aoci-cs,1)
+    # CFS extra items
+    sbc=round(N*.10,1); d_ar=round(-R*.007,1); d_inv=round(-R*.004,1)
+    d_ap=round(R*.004,1); oth_wc=round(R*.002,1)
+    cfo=round(N+da+sbc+d_ar+d_inv+d_ap+oth_wc,1)
+    cfi=round(-capex-R*.04+R*.016,1)
+    debt_pay=round(-nd*.04,1); sop=round(N*.04,1); tax_sop=round(-N*.027,1)
+    cff=round(-divs+debt_pay+sop+tax_sop,1)
+    net_chg=round(cfo+cfi+cff,1); beg_cash=round(cash_cce-net_chg,1)
+
+    ws=wb.create_sheet("Advanced Practice"); _cw(ws,[("A",50),("B",14)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    # ── IS ──────────────────────────────────────────────────────────
+    _fs_title(ws,r,nm); r+=1
+    _fs_title(ws,r,"CONSOLIDATED STATEMENT OF OPERATIONS"); r+=1
+    _fs_title(ws,r,"(Amounts in millions of U.S. dollars, except per share data — Fiscal Year 2024)",sub=True); r+=2
+    _fs(ws,r,"Revenues",hdr=True); r+=1
+    _fs(ws,r,"Product revenue",prod_rev,ind=1); r+=1
+    _fs(ws,r,"Service and subscription revenue",svc_rev,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total revenues",R,bold=True); r+=2
+    _fs(ws,r,"Costs and expenses",hdr=True); r+=1
+    _fs(ws,r,"Cost of product revenue",cogs_prod,ind=1); r+=1
+    _fs(ws,r,"Cost of service revenue",cogs_svc,ind=1,ul=True); r+=1
+    _fs(ws,r,"Gross profit",gp,bold=True); r+=2
+    _fs(ws,r,"Operating expenses",hdr=True); r+=1
+    _fs(ws,r,"Research and development",rd,ind=1); r+=1
+    _fs(ws,r,"Sales and marketing",sm,ind=1); r+=1
+    _fs(ws,r,"General and administrative",ga,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total operating expenses",sga,bold=True); r+=2
+    _fs(ws,r,"Earnings before interest, taxes, depreciation and amortization (EBITDA)",E,bold=True); r+=1
+    _fs(ws,r,"Depreciation and amortization",da,ind=1,ul=True); r+=1
+    _fs(ws,r,"Operating income",ebit,bold=True); r+=2
+    _fs(ws,r,"Other income (expense)",hdr=True); r+=1
+    _fs(ws,r,"Interest income",int_inc,ind=1); r+=1
+    _fs(ws,r,"Interest expense",-int_exp,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total other income (expense), net",-interest_net,bold=True); r+=2
+    _fs(ws,r,"Income before provision for income taxes",ebt,bold=True); r+=1
+    _fs(ws,r,"Provision for income taxes (effective rate ~30%)",-tax,ind=1,ul=True); r+=1
+    _fs(ws,r,"Net income",N,bold=True); r+=2
+    _fs(ws,r,f"Earnings per share — Basic ${N/S:.2f}  |  Diluted ${N/(S*1.06):.2f}  |  Wtd-avg shares: Basic {S:.0f}M, Diluted {S*1.06:.1f}M",note=True); r+=3
+    # ── BS ──────────────────────────────────────────────────────────
+    _fs_title(ws,r,"CONSOLIDATED BALANCE SHEET"); r+=1
+    _fs_title(ws,r,"(Amounts in millions of U.S. dollars — December 31, 2024)",sub=True); r+=2
+    _fs(ws,r,"ASSETS",hdr=True); r+=1
+    _fs(ws,r,"Current assets",bold=True,ind=0); r+=1
+    _fs(ws,r,"Cash and cash equivalents",cash_cce,ind=1); r+=1
+    _fs(ws,r,"Short-term investments",cash_stinv,ind=1); r+=1
+    _fs(ws,r,"Total cash, cash equivalents and short-term investments",cash_tot,ind=2,bold=True); r+=1
+    _fs(ws,r,"Accounts receivable, net of allowances of $2.1",ar,ind=1); r+=1
+    _fs(ws,r,"Inventories",inv,ind=1); r+=1
+    _fs(ws,r,"Prepaid expenses and other current assets",prepaid,ind=1); r+=1
+    _fs(ws,r,"Income taxes receivable",tax_rec,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total current assets",curr_a,bold=True); r+=2
+    _fs(ws,r,"Property and equipment, net",ppe); r+=1
+    _fs(ws,r,"Goodwill",goodwill); r+=1
+    _fs(ws,r,"Intangible assets, net",intang); r+=1
+    _fs(ws,r,"Other long-term assets",other_lta,ul=True); r+=1
+    _fs(ws,r,"Total assets",tot_a,bold=True); r+=3
+    _fs(ws,r,"LIABILITIES AND STOCKHOLDERS' EQUITY",hdr=True); r+=1
+    _fs(ws,r,"Current liabilities",bold=True); r+=1
+    _fs(ws,r,"Accounts payable",ap,ind=1); r+=1
+    _fs(ws,r,"Accrued compensation and benefits",accrued,ind=1); r+=1
+    _fs(ws,r,"Other accrued liabilities",oth_acc,ind=1); r+=1
+    _fs(ws,r,"Current portion of long-term debt",std,ind=1); r+=1
+    _fs(ws,r,"Income taxes payable",tax_pay,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total current liabilities",curr_l,bold=True); r+=2
+    _fs(ws,r,"Long-term debt, net of current portion",ltd); r+=1
+    _fs(ws,r,"Deferred revenue, non-current",def_rev); r+=1
+    _fs(ws,r,"Other long-term liabilities",oth_ltl,ul=True); r+=1
+    _fs(ws,r,"Total liabilities",tot_l,bold=True); r+=2
+    _fs(ws,r,"Stockholders' equity",bold=True); r+=1
+    _fs(ws,r,"Common stock and additional paid-in capital",cs,ind=1); r+=1
+    _fs(ws,r,"Retained earnings",re,ind=1); r+=1
+    _fs(ws,r,"Accumulated other comprehensive income (loss)",aoci,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total stockholders' equity",tot_eq,bold=True); r+=1
+    _fs(ws,r,"Total liabilities and stockholders' equity",tot_a,bold=True); r+=3
+    # ── CFS ─────────────────────────────────────────────────────────
+    _fs_title(ws,r,"CONSOLIDATED STATEMENT OF CASH FLOWS"); r+=1
+    _fs_title(ws,r,"(Amounts in millions of U.S. dollars — Fiscal Year 2024)",sub=True); r+=2
+    _fs(ws,r,"Cash flows from operating activities",hdr=True); r+=1
+    _fs(ws,r,"Net income",N,ind=1); r+=1
+    _fs(ws,r,"Depreciation and amortization",da,ind=2); r+=1
+    _fs(ws,r,"Stock-based compensation expense",sbc,ind=2); r+=1
+    _fs(ws,r,"Amortization of deferred financing costs",round(R*.002,1),ind=2); r+=1
+    _fs(ws,r,"Accounts receivable",d_ar,ind=2); r+=1
+    _fs(ws,r,"Inventories",d_inv,ind=2); r+=1
+    _fs(ws,r,"Accounts payable",d_ap,ind=2); r+=1
+    _fs(ws,r,"Accrued liabilities and other",oth_wc,ind=2,ul=True); r+=1
+    _fs(ws,r,"Net cash provided by operating activities",cfo,bold=True); r+=2
+    _fs(ws,r,"Cash flows from investing activities",hdr=True); r+=1
+    _fs(ws,r,"Capital expenditures",-capex,ind=1); r+=1
+    _fs(ws,r,"Purchases of short-term investments",round(-R*.04,1),ind=1); r+=1
+    _fs(ws,r,"Proceeds from maturities of investments",round(R*.016,1),ind=1,ul=True); r+=1
+    _fs(ws,r,"Net cash used in investing activities",cfi,bold=True); r+=2
+    _fs(ws,r,"Cash flows from financing activities",hdr=True); r+=1
+    _fs(ws,r,"Proceeds from exercise of stock options",sop,ind=1); r+=1
+    _fs(ws,r,"Taxes paid related to vested stock awards",tax_sop,ind=1); r+=1
+    _fs(ws,r,"Repayment of long-term debt",debt_pay,ind=1); r+=1
+    _fs(ws,r,"Dividends paid to stockholders",-divs,ind=1,ul=True); r+=1
+    _fs(ws,r,"Net cash used in financing activities",cff,bold=True); r+=2
+    _fs(ws,r,"Net increase (decrease) in cash and cash equivalents",net_chg,bold=True); r+=1
+    _fs(ws,r,"Cash and cash equivalents, beginning of year",beg_cash); r+=1
+    _fs(ws,r,"Cash and cash equivalents, end of year",cash_cce,bold=True,ul=True); r+=2
+    _fs(ws,r,f"Supplemental: Capital expenditures above = cash paid for PP&E. Dividends per share: ${divs/S:.2f}.",note=True)
+
+
+def _make_adv_dcf(wb, co):
+    R=co["rev_n"]; E=co["ebitda_n"]; N=co["ni_n"]; S=co["shares_n"]; nm=co["name"]
+    P=co["price_n"]; g=co.get("rev_growth",.05); wc_r=co.get("wacc",.0935)
+    tg=co.get("terminal_g",.025); TAX=0.30
+    cogs=round(R*.60,1); sga=round(R*.40-E,1); da=round(R*.06,1)
+    ebit=E-da; ebt=round(N/(1-TAX),1); interest_net=round(ebit-ebt,1); tax=round(ebt*TAX,1)
+    nd=round(E*1.05/5)*5; mktcap=round(P*S,1); ev=mktcap+nd
+    ltd_sr=round(nd*.72,1); ltd_notes=round(nd*.28,1)
+    kd_pre=round(.07,4); ke=round(.045+1.10*.055,4)
+    prod_rev=round(R*.70,1); svc_rev=round(R-prod_rev,1)
+    cogs_prod=round(cogs*.80,1); cogs_svc=round(cogs-cogs_prod,1)
+    rd=round(sga*.40,1); sm=round(sga*.35,1); ga=round(sga-rd-sm,1)
+    int_inc=round(ebt*.02,1); int_exp=round(interest_net+int_inc,1)
+
+    ws=wb.create_sheet("Advanced Practice"); _cw(ws,[("A",50),("B",14)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    # IS
+    _fs_title(ws,r,nm); r+=1
+    _fs_title(ws,r,"CONSOLIDATED STATEMENT OF OPERATIONS  (USD millions — FY 2024)",sub=True); r+=2
+    _fs(ws,r,"Revenues",hdr=True); r+=1
+    _fs(ws,r,"Product revenue",prod_rev,ind=1); r+=1
+    _fs(ws,r,"Service and subscription revenue",svc_rev,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total revenues",R,bold=True); r+=2
+    _fs(ws,r,"Cost of product revenue",cogs_prod,ind=1); r+=1
+    _fs(ws,r,"Cost of service revenue",cogs_svc,ind=1,ul=True); r+=1
+    _fs(ws,r,"Gross profit",round(R-cogs,1),bold=True); r+=2
+    _fs(ws,r,"Research and development",rd,ind=1); r+=1
+    _fs(ws,r,"Sales and marketing",sm,ind=1); r+=1
+    _fs(ws,r,"General and administrative",ga,ind=1,ul=True); r+=1
+    _fs(ws,r,"Total operating expenses (excl. D&A)",sga,bold=True); r+=1
+    _fs(ws,r,"EBITDA",E,bold=True); r+=1
+    _fs(ws,r,"Depreciation and amortization",da,ind=1,ul=True); r+=1
+    _fs(ws,r,"Operating income (EBIT)",ebit,bold=True); r+=1
+    _fs(ws,r,"Interest income",int_inc,ind=1); r+=1
+    _fs(ws,r,"Interest expense",-int_exp,ind=1,ul=True); r+=1
+    _fs(ws,r,"Income before taxes",ebt,bold=True); r+=1
+    _fs(ws,r,"Provision for income taxes",-tax,ind=1,ul=True); r+=1
+    _fs(ws,r,"Net income",N,bold=True); r+=2
+    _fs(ws,r,f"Diluted EPS: ${N/(S*1.06):.2f}  |  Diluted shares: {S*1.06:.1f}M  |  Basic EPS: ${N/S:.2f}",note=True); r+=3
+    # Market & Capital Structure Data
+    _fs_title(ws,r,"SELECTED MARKET & CAPITAL STRUCTURE DATA"); r+=1
+    _fs_title(ws,r,"(As of December 31, 2024)",sub=True); r+=2
+    _fs(ws,r,"Market Data",hdr=True); r+=1
+    _fs(ws,r,"Share price (closing)",P,ind=1); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=1
+    _fs(ws,r,"Diluted shares outstanding (M)",S*1.06,ind=1); r+=1
+    _fs(ws,r,"Market capitalization ($M)",mktcap,ind=1,bold=True); r+=1
+    _fs(ws,r,f"52-week trading range:  ${round(P*.72,2):.2f}  —  ${round(P*1.14,2):.2f}",note=True,ind=1); r+=2
+    _fs(ws,r,"Capital Structure",hdr=True); r+=1
+    _fs(ws,r,"Cash and short-term investments ($M)",round(R*.15,1),ind=1); r+=1
+    _fs(ws,r,"Total debt ($M)",nd+round(R*.15,1),ind=1); r+=1
+    _fs(ws,r,"Net debt ($M)",nd,ind=1,bold=True); r+=1
+    _fs(ws,r,"Enterprise value ($M)",ev,ind=1,bold=True); r+=2
+    _fs(ws,r,"Debt Structure",hdr=True); r+=1
+    _fs(ws,r,f"Senior secured term loan due 2028 — ${ltd_sr}M  @  SOFR + 2.50% (all-in ~6.5%)",note=False,ind=1); r+=1
+    _fs(ws,r,f"Senior unsecured notes due 2031 — ${ltd_notes}M  @  6.25% fixed",ind=1); r+=1
+    _fs(ws,r,"Pre-tax weighted-avg. cost of debt",kd_pre,ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=1
+    _fs(ws,r,"After-tax cost of debt (×0.70)",round(kd_pre*.70,4),ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=2
+    _fs(ws,r,"WACC Inputs from Equity Research Coverage",hdr=True); r+=1
+    _fs(ws,r,"10-Year U.S. Treasury yield (risk-free rate)",.045,ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=1
+    _fs(ws,r,"Equity risk premium (ERP)",.055,ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=1
+    _fs(ws,r,"Company levered beta (5-year monthly regression)",1.10,ind=1); r+=1
+    _fs(ws,r,"Implied cost of equity  [= Rf + β × ERP]",ke,ind=1,bold=True); ws[f"B{r-1}"].number_format="0.00%"; r+=1
+    _fs(ws,r,"Debt / (Debt + Equity) at market value",round(nd/ev,4),ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=1
+    _fs(ws,r,"Equity / (Debt + Equity) at market value",round(mktcap/ev,4),ind=1); ws[f"B{r-1}"].number_format="0.00%"; r+=2
+    _fs(ws,r,f"Analyst consensus revenue growth (next 3 years avg.): {g*100:.1f}%/yr  |  Long-run GDP growth consensus: {tg*100:.1f}%",note=True); r+=1
+    _fs(ws,r,"Terminal growth rate should reflect long-run nominal GDP and MUST be less than WACC or model produces infinite value.",note=True)
+
+
+def _make_adv_comps(wb, co):
+    E=co["ebitda_n"]; S=co["shares_n"]; P=co["price_n"]; nm=co["name"]
+    nd=round(E*1.05/5)*5; mktcap=round(P*S,1)
+    # Peer data: (name, mktcap, net_debt, ebitda, revenue, net_income, rev_growth, ebitda_margin)
+    peers=[
+        ("TechAlpha Corp",    1202, 1104-1202,   120, 480, 65,  .08, .250),
+        ("DataCore Systems",   810,  810-810,    100, 420, 50,  .05, .238),
+        ("CloudSystems Inc",  1239, 1260-1239,   120, 400, 59,  .12, .300),
+        ("InfoPro Ltd",        853,  858-853,    110, 510, 54,  .04, .216),
+    ]
+    ws=wb.create_sheet("Advanced Practice")
+    _cw(ws,[("A",22),("B",12),("C",12),("D",12),("E",12),("F",12),("G",10),("H",10),("I",10),("J",10)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    _fs_title(ws,r,"COMPARABLE COMPANY TRADING ANALYSIS — EQUITY RESEARCH SCREEN"); r+=1
+    _fs_title(ws,r,"(USD millions except per share; market data as of December 31, 2024)",sub=True); r+=2
+    # Header row
+    hdrs=["Company","Mkt Cap","Net Debt","Total Debt","LTM Revenue","LTM EBITDA","LTM Net Inc.","Rev Growth","EBITDA Mgn","Share Price"]
+    for i,h in enumerate(hdrs,1):
+        c=ws.cell(row=r,column=i,value=h)
+        c.font=Font(bold=True,size=8,color="FFFFFF"); c.fill=PatternFill("solid",fgColor="1E3A5F")
+        c.alignment=Alignment(horizontal="center",wrap_text=True)
+    ws.row_dimensions[r].height=28; r+=1
+    # Peer rows
+    peer_prices=[round(mc/s,2) for mc,s in [(1202,26.7),(810,28.9),(1239,21.0),(853,15.8)]]
+    peer_shares=[26.7,28.9,21.0,15.8]
+    for i,((pnm,mc,net_d,ebitda,rev,ni,rg,em),pp,ps) in enumerate(zip(peers,peer_prices,peer_shares)):
+        td=round(mc+net_d,0)
+        cols=[pnm,mc,net_d,td,rev,ebitda,ni,f"{rg*100:.1f}%",f"{em*100:.1f}%",f"${pp:.2f}"]
+        for j,val in enumerate(cols,1):
+            c=ws.cell(row=r,column=j,value=val)
+            c.font=Font(size=9); c.alignment=Alignment(horizontal="right" if j>1 else "left")
+            if j>1 and isinstance(val,(int,float)):
+                c.number_format='#,##0.0'
+        r+=1
+    r+=1
+    # Subject company data (noisier — more line items than needed)
+    _fs_title(ws,r,f"SUBJECT COMPANY: {nm}"); r+=1
+    _fs_title(ws,r,"Selected Financial & Market Data  (USD millions — FY 2024)",sub=True); r+=2
+    _fs(ws,r,"Market capitalization",mktcap,bold=True); r+=1
+    _fs(ws,r,"Net debt (total debt minus cash & equivalents)",nd); r+=1
+    _fs(ws,r,"Enterprise value  [market cap + net debt]",mktcap+nd,bold=True); r+=2
+    _fs(ws,r,"LTM Total revenues",co["rev_n"]); r+=1
+    _fs(ws,r,"LTM EBITDA",E,bold=True); r+=1
+    _fs(ws,r,"LTM Operating income (EBIT)",round(E-co["rev_n"]*.06,1)); r+=1
+    _fs(ws,r,"LTM Net income",co["ni_n"]); r+=1
+    _fs(ws,r,"LTM Diluted EPS",round(co["ni_n"]/(S*1.06),2)); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=2
+    _fs(ws,r,"Shares outstanding — Basic (M)",S); r+=1
+    _fs(ws,r,"Shares outstanding — Diluted (M)",round(S*1.06,1)); r+=1
+    _fs(ws,r,"Share price",P); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=2
+    _fs(ws,r,"NOTE: Derive EV/EBITDA and EV/Revenue multiples for each peer. Apply peer median multiples to subject company to arrive at implied Enterprise Value and implied share price.",note=True)
+
+
+def _make_adv_precedent(wb, co):
+    E=co["ebitda_n"]; S=co["shares_n"]; P=co["price_n"]; nm=co["name"]
+    nd=round(E*1.05/5)*5
+    ws=wb.create_sheet("Advanced Practice"); _cw(ws,[("A",50),("B",14)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    _fs_title(ws,r,"PRECEDENT TRANSACTION RESEARCH — M&A DEAL SUMMARIES"); r+=1
+    _fs_title(ws,r,"Selected completed acquisitions in the sector  (USD millions unless noted)",sub=True); r+=3
+
+    deals=[
+        ("AcquireCo / TechAlpha Corporation","February 14, 2022",1320,120,975,
+         "Strategic acquisition to expand cloud infrastructure capabilities. AcquireCo cited ~$45M in annual run-rate synergies (cost savings + cross-sell). "
+         "Premium of 35.4% to TechAlpha's unaffected 30-day VWAP of $36.50. Deal financed with $800M of new term loans and $520M equity."),
+        ("MegaCorp Industries / DataCore Systems","September 8, 2021",980,100,809,
+         "Bolt-on acquisition. MegaCorp CEO: 'Accelerates our data analytics roadmap by 3 years.' "
+         "Unaffected market cap $809M; deal at 21.1% premium. All-cash offer at $33.90 per DataCore share. LTM EBITDA at signing: $100M; no NTM guidance available."),
+        ("GlobalTech Partners / InfoPro Ltd","June 3, 2023",1045,110,856,
+         "Public-to-private buyout led by GlobalTech with co-investment from two PE firms. "
+         "InfoPro had been exploring strategic alternatives since Q4 2022. Implied EV/LTM EBITDA premium vs. InfoPro's 90-day avg. trading multiple: +2.8 turns. "
+         "Deal included $180M rollover equity from InfoPro management."),
+    ]
+    for deal_nm,date,dev,debitda,predeal_mc,desc in deals:
+        _fs(ws,r,f"DEAL:  {deal_nm}",hdr=True); r+=1
+        _fs(ws,r,f"Announcement Date: {date}",note=True,ind=1); r+=1
+        _fs(ws,r,"Deal Enterprise Value (EV)",dev,ind=1,bold=True); r+=1
+        _fs(ws,r,"Target LTM EBITDA at announcement",debitda,ind=1); r+=1
+        _fs(ws,r,"Target unaffected market capitalization",predeal_mc,ind=1); r+=1
+        _fs(ws,r,"Total equity consideration",round(predeal_mc*1.354 if deal_nm.startswith("Acq") else (predeal_mc*1.211 if deal_nm.startswith("Mega") else predeal_mc*1.220),1),ind=1); r+=1
+        for line in [desc[i:i+110] for i in range(0,len(desc),110)]:
+            _fs(ws,r,line,note=True,ind=1); r+=1
+        r+=2
+
+    _fs_title(ws,r,f"SUBJECT COMPANY: {nm}"); r+=1
+    _fs_title(ws,r,"Current trading and financial profile  (USD millions — FY 2024)",sub=True); r+=2
+    _fs(ws,r,"LTM EBITDA",E,bold=True); r+=1
+    _fs(ws,r,"Current share price",P); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=1
+    _fs(ws,r,"Shares outstanding (M)",S); r+=1
+    _fs(ws,r,"Current market capitalization",round(P*S,1),bold=True); r+=1
+    _fs(ws,r,"Net debt",nd); r+=1
+    _fs(ws,r,"Current Enterprise Value",round(P*S+nd,1),bold=True); r+=2
+    _fs(ws,r,"NOTE: Compute EV/EBITDA for each deal. Apply median deal multiple to subject EBITDA to get implied acquisition EV → subtract net debt → divide by shares → floor acquisition price per share.",note=True)
+
+
+def _make_adv_lbo(wb, co):
+    R=co["rev_n"]; E=co["ebitda_n"]; N=co["ni_n"]; nm=co["name"]
+    da=round(R*.06,1); capex=round(R*.07,1); g=co.get("rev_growth",.05); TAX=0.30
+    ebit=E-da; ebt=round(N/(1-TAX),1); tax=round(ebt*TAX,1)
+    cogs=round(R*.60,1); sga=round(R*.40-E,1)
+    entry_ev=round(E*9.0,1); debt=round(entry_ev*.60,1); equity_in=round(entry_ev*.40,1)
+    interest=round(debt*.07,1)
+
+    ws=wb.create_sheet("Advanced Practice"); _cw(ws,[("A",50),("B",14)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    _fs_title(ws,r,f"LEVERAGED BUYOUT — {nm.upper()}"); r+=1
+    _fs_title(ws,r,"Management Presentation & Lender Materials  (USD millions — FY 2024)",sub=True); r+=3
+
+    _fs_title(ws,r,"SECTION 1:  TARGET COMPANY FINANCIALS"); r+=2
+    _fs(ws,r,"Income Statement Summary",hdr=True); r+=1
+    _fs(ws,r,"Total revenues",R,bold=True); r+=1
+    _fs(ws,r,"Cost of revenues",cogs,ind=1); r+=1
+    _fs(ws,r,"Gross profit",round(R-cogs,1)); r+=1
+    _fs(ws,r,"Operating expenses (R&D, S&M, G&A)",sga,ind=1); r+=1
+    _fs(ws,r,"EBITDA",E,bold=True); r+=1
+    _fs(ws,r,"D&A",da,ind=1); r+=1
+    _fs(ws,r,"EBIT",ebit); r+=1
+    _fs(ws,r,"Interest expense (pre-transaction)",round(ebt*.20,1),ind=1); r+=1
+    _fs(ws,r,"Pre-tax income",ebt); r+=1
+    _fs(ws,r,"Income taxes",tax,ind=1); r+=1
+    _fs(ws,r,"Net income",N,bold=True); r+=2
+    _fs(ws,r,"Key Metrics",hdr=True); r+=1
+    _fs(ws,r,"EBITDA margin",round(E/R*100,1),ind=1); ws[f"B{r-1}"].number_format='0.0"%"'; r+=1
+    _fs(ws,r,"Capex ($M)",capex,ind=1); r+=1
+    _fs(ws,r,"Historical revenue growth (3-yr CAGR)",round(g*100,1),ind=1); ws[f"B{r-1}"].number_format='0.0"%"'; r+=1
+    _fs(ws,r,f"Management projects {g*100:.0f}–{g*100+2:.0f}%/yr revenue growth over next 5 years; EBITDA margins stable.",note=True,ind=1); r+=3
+
+    _fs_title(ws,r,"SECTION 2:  TRANSACTION & FINANCING TERMS"); r+=2
+    _fs(ws,r,"Transaction Structure",hdr=True); r+=1
+    _fs(ws,r,"Acquisition structure",ind=1); ws[f"A{r-1}"].value="    All-equity public-to-private; no existing debt assumed"; r+=1
+    _fs(ws,r,"Entry valuation multiple (EV / LTM EBITDA)",9.0,ind=1); r+=1
+    _fs(ws,r,"Implied Entry Enterprise Value",entry_ev,ind=1,bold=True); r+=1
+    _fs(ws,r,"Transaction fees and expenses (est.)",round(entry_ev*.02,1),ind=1); r+=2
+    _fs(ws,r,"Financing Structure (Sources & Uses)",hdr=True); r+=1
+    _fs(ws,r,"Senior Secured Term Loan B  —  60% of EV  @  SOFR+350bps (~7.0% all-in)",debt,ind=1); r+=1
+    _fs(ws,r,"Sponsor equity contribution  —  40% of EV",equity_in,ind=1,bold=True); r+=2
+    _fs(ws,r,"Debt Terms",hdr=True); r+=1
+    _fs(ws,r,"Amortization","1% per annum of original principal (bullet at maturity)",ind=1); ws[f"B{r-1}"].value="1% p.a. + cash sweep"; r+=1
+    _fs(ws,r,"Cash sweep: 75% of excess cash flow applied to debt paydown",note=True,ind=1); r+=1
+    _fs(ws,r,"Maturity","7 years",ind=1); ws[f"B{r-1}"].value="7 years from close"; r+=1
+    _fs(ws,r,"Financial covenant: max Net Debt / EBITDA of 6.5×, stepping down 0.5× per year",note=True,ind=1); r+=2
+    _fs(ws,r,"Exit Assumptions",hdr=True); r+=1
+    _fs(ws,r,"Assumed hold period","5 years",ind=1); ws[f"B{r-1}"].value="5 years"; r+=1
+    _fs(ws,r,"Exit multiple (conservative base case: entry = exit)",9.0,ind=1); r+=1
+    _fs(ws,r,"Target IRR for sponsor capital: 20%+ (minimum acceptable)",note=True,ind=1); r+=2
+    _fs(ws,r,"NOTE: Build Sources & Uses → Debt Schedule (5 yrs of beginning debt, interest, EBITDA, FCF for paydown, ending debt) → Exit & Returns (Exit EV, remaining debt, exit equity, MOIC, IRR).",note=True)
+
+
+def _make_adv_merger(wb, co):
+    R=co["rev_n"]; E=co["ebitda_n"]; N=co["ni_n"]; P=co["price_n"]; S=co["shares_n"]; nm=co["name"]
+    TAX=0.30; cogs=round(R*.60,1); sga=round(R*.40-E,1); da=round(R*.06,1)
+    ebit=E-da; ebt=round(N/(1-TAX),1); tax=round(ebt*TAX,1)
+    tgt_rev=round(R*.60,1); tgt_ebitda=round(E*.58,1); tgt_ni=round(N*.35,1)
+    tgt_P=round(P*.60,2); tgt_S=round(S*.40,1); tgt_da=round(R*.60*.06,1)
+    tgt_cogs=round(tgt_rev*.60,1); tgt_sga=round(tgt_rev*.40-tgt_ebitda,1)
+    tgt_ebit=tgt_ebitda-tgt_da; tgt_ebt=round(tgt_ni/(1-TAX),1)
+    tgt_int=round(tgt_ebit-tgt_ebt,1); tgt_tax=round(tgt_ebt*TAX,1)
+    syn=round(N*.08,1); amort=round(N*.04,1)
+
+    ws=wb.create_sheet("Advanced Practice"); _cw(ws,[("A",50),("B",14),("C",14)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    _fs_title(ws,r,f"MERGER ANALYSIS — {nm.upper()} (ACQUIRER) + TARGETCO (TARGET)"); r+=1
+    _fs_title(ws,r,"Pro Forma Merger Analysis  (USD millions, FY 2024 financials)",sub=True); r+=3
+
+    # Side-by-side IS
+    _fs_title(ws,r,"INCOME STATEMENTS — STANDALONE"); r+=1
+    ws.cell(row=r,column=2,value=nm).font=Font(bold=True,size=9)
+    ws.cell(row=r,column=3,value="TargetCo").font=Font(bold=True,size=9); r+=1
+    rows_is=[("Total revenues",R,tgt_rev),("Cost of revenues",cogs,tgt_cogs),
+             ("Gross profit",round(R-cogs,1),round(tgt_rev-tgt_cogs,1)),
+             ("Operating expenses (excl. D&A)",sga,tgt_sga),("EBITDA",E,tgt_ebitda),
+             ("Depreciation & amortization",da,tgt_da),("EBIT",ebit,tgt_ebit),
+             ("Interest expense (net)",round(ebt*.20,1),tgt_int),
+             ("Income before taxes",ebt,tgt_ebt),("Income taxes",tax,tgt_tax),
+             ("Net income",N,tgt_ni)]
+    for lbl,va,vb in rows_is:
+        bold=lbl in ("Total revenues","Gross profit","EBITDA","Net income")
+        ws.cell(row=r,column=1,value=lbl).font=Font(bold=bold,size=9)
+        for j,v in [(2,va),(3,vb)]:
+            c=ws.cell(row=r,column=j,value=v)
+            c.font=Font(bold=bold,size=9); c.number_format='#,##0.0'; c.alignment=_RIGHT_ALIGN
+        r+=1
+    r+=2
+
+    _fs_title(ws,r,"SHARE & DEAL DATA"); r+=2
+    _fs(ws,r,f"{nm} — Share Data",hdr=True); r+=1
+    _fs(ws,r,"Share price",P,ind=1); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=1
+    _fs(ws,r,"Basic shares outstanding (M)",S,ind=1); r+=1
+    _fs(ws,r,"Market capitalization ($M)",round(P*S,1),ind=1,bold=True); r+=2
+    _fs(ws,r,"TargetCo — Share & Deal Data",hdr=True); r+=1
+    _fs(ws,r,"Unaffected market price (30-day VWAP pre-announcement)",tgt_P,ind=1); ws[f"B{r-1}"].number_format='"$"#,##0.00'; r+=1
+    _fs(ws,r,"Shares outstanding (M)",tgt_S,ind=1); r+=1
+    _fs(ws,r,"Unaffected market capitalization ($M)",round(tgt_P*tgt_S,1),ind=1); r+=1
+    _fs(ws,r,"Proposed acquisition premium",0.25,ind=1); ws[f"B{r-1}"].number_format="0%"; r+=1
+    _fs(ws,r,"Consideration: all-stock (new shares of Acquirer issued to Target shareholders)",ind=1); ws[f"B{r-1}"].value="All-stock"; r+=2
+    _fs(ws,r,"Deal Synergies & Purchase Accounting",hdr=True); r+=1
+    _fs(ws,r,"Estimated after-tax run-rate cost synergies (Year 2 onwards)",syn,ind=1,bold=True); r+=1
+    _fs(ws,r,"  — Sources: procurement savings $X, duplicate headcount $Y, facility consolidation $Z",note=True,ind=1); r+=1
+    _fs(ws,r,"Intangible assets acquired (customer relationships, technology, brand)",round(amort*25,1),ind=1); r+=1
+    _fs(ws,r,"Intangible amortization (straight-line, 25-year life, non-cash P&L charge)",-amort,ind=1,bold=True); r+=2
+    _fs(ws,r,"NOTE: Compute offer price per share, total deal value, new shares issued, pro forma NI (acquirer + target + synergies − intangibles amort), pro forma shares, and test EPS accretion/dilution.",note=True)
+
+
+def _make_adv_budget(wb, co):
+    R=co["rev_n"]; E=co["ebitda_n"]; nm=co["name"]
+    cogs=round(R*.60,1); sga=round(R*.40-E,1); TAX=0.30
+    # Budget vs actual with MORE detail than model needs (by product line)
+    UB,UA=12_000,11_500; rb=round(R*.24,1); ra=round(rb*.942,1)
+    cb=round(cogs*.24,1); ca=round(cb*.976,1)
+    sb=round(sga*.25,1); sa=round(sb*1.075,1)
+    pb=round(rb*1e6/UB); pa=round(ra*1e6/UA)
+    # Sub-line detail (noise)
+    rb_prod=round(rb*.72,1); rb_svc=round(rb-rb_prod,1)
+    ra_prod=round(ra*.73,1); ra_svc=round(ra-ra_prod,1)
+    cb_prod=round(cb*.80,1); cb_svc=round(cb-cb_prod,1)
+    ca_prod=round(ca*.79,1); ca_svc=round(ca-ca_prod,1)
+    sb_rd=round(sb*.40,1); sb_sm=round(sb*.35,1); sb_ga=round(sb-sb_rd-sb_sm,1)
+    sa_rd=round(sa*.42,1); sa_sm=round(sa*.36,1); sa_ga=round(sa-sa_rd-sa_sm,1)
+    # derived
+    rb_gp=round(rb-cb,1); ra_gp=round(ra-ca,1)
+    rb_eb=round(rb_gp-sb,1); ra_eb=round(ra_gp-sa,1)
+
+    ws=wb.create_sheet("Advanced Practice")
+    _cw(ws,[("A",32),("B",12),("C",12),("D",12),("E",12),("F",10)])
+    r=1; _adv_header(ws,r,nm); r+=2
+    _fs_title(ws,r,f"{nm}  —  Q1 MANAGEMENT PROFIT & LOSS REPORT"); r+=1
+    _fs_title(ws,r,"Internal Use Only  |  All figures in $M  |  Unit economics in actual $",sub=True); r+=2
+
+    # Table header
+    hdrs=["","Budget","Actual","Variance $","Variance %","F / U"]
+    for j,h in enumerate(hdrs,1):
+        c=ws.cell(row=r,column=j,value=h)
+        c.font=Font(bold=True,size=9,color="FFFFFF")
+        c.fill=PatternFill("solid",fgColor="1E3A5F")
+        c.alignment=Alignment(horizontal="center" if j>1 else "left")
+    r+=1
+
+    def _bv(ws,row,lbl,bv,av,bold=False,ind=0):
+        ws.cell(row=row,column=1,value="  "*ind+lbl).font=Font(bold=bold,size=9)
+        for j,v in [(2,bv),(3,av)]:
+            c=ws.cell(row=row,column=j,value=v)
+            c.font=Font(bold=bold,size=9); c.number_format='#,##0.0'; c.alignment=_RIGHT_ALIGN
+        # Leave variance cols blank for student to compute
+
+    _bv(ws,r,"REVENUES",None,None,bold=True); r+=1
+    _bv(ws,r,"Product revenue",rb_prod,ra_prod,ind=1); r+=1
+    _bv(ws,r,"Service revenue",rb_svc,ra_svc,ind=1); r+=1
+    _bv(ws,r,"Total revenues",rb,ra,bold=True); r+=2
+    _bv(ws,r,"COST OF REVENUES",None,None,bold=True); r+=1
+    _bv(ws,r,"Cost of product revenue",cb_prod,ca_prod,ind=1); r+=1
+    _bv(ws,r,"Cost of service revenue",cb_svc,ca_svc,ind=1); r+=1
+    _bv(ws,r,"Total cost of revenues",cb,ca,bold=True); r+=1
+    _bv(ws,r,"Gross profit",rb_gp,ra_gp,bold=True); r+=2
+    _bv(ws,r,"OPERATING EXPENSES",None,None,bold=True); r+=1
+    _bv(ws,r,"Research & development",sb_rd,sa_rd,ind=1); r+=1
+    _bv(ws,r,"Sales & marketing",sb_sm,sa_sm,ind=1); r+=1
+    _bv(ws,r,"General & administrative",sb_ga,sa_ga,ind=1); r+=1
+    _bv(ws,r,"Total operating expenses",sb,sa,bold=True); r+=1
+    _bv(ws,r,"EBITDA",rb_eb,ra_eb,bold=True); r+=3
+
+    _fs_title(ws,r,"UNIT ECONOMICS  —  Revenue Bridge"); r+=2
+    _bv(ws,r,"Units sold",UB,UA); r+=1
+    _bv(ws,r,"Avg. selling price / unit ($)",pb,pa); r+=2
+    _fs(ws,r,"NOTE: Build the variance table above (Variance $, Variance %, F/U flag for each line). "
+           "Then decompose the revenue miss into Volume Effect and Price Effect. "
+           "Aggregate sub-line items to match a simplified model (Revenue, COGS, Gross Profit, SG&A, EBITDA).",note=True)
+
+
+_ADV_BUILDERS = {
+    "3stmt": _make_adv_3stmt, "dcf": _make_adv_dcf, "comps": _make_adv_comps,
+    "precedent": _make_adv_precedent, "lbo": _make_adv_lbo,
+    "merger": _make_adv_merger, "budget": _make_adv_budget,
+}
+
+
+def make_model_excel_advanced(model_key, co):
+    """Complete Model (reference) + Advanced Practice (given inputs only, blank workspace)."""
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    # Add complete reference sheets
+    {"3stmt": _make_3stmt_excel, "dcf": _make_dcf_excel, "comps": _make_comps_excel,
+     "precedent": _make_precedent_excel, "lbo": _make_lbo_excel,
+     "merger": _make_merger_excel, "budget": _make_budget_excel
+    }[model_key](wb, co)
+    # Remove the guided Practice sheets (keep only Complete sheets)
+    for sname in [s for s in wb.sheetnames if "Practice" in s]:
+        wb.remove(wb[sname])
+    # Add the blank Advanced Practice sheet
+    _ADV_BUILDERS[model_key](wb, co)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return buf
+
+
+def _build_tab_header(model_key, sheet_desc):
+    co = current_company()
+    col_a, col_b = st.columns(2)
+    with col_a:
+        buf = make_model_excel(model_key, co)
+        st.download_button(
+            f"⬇  Download Excel Template  —  {co['name']}",
+            buf,
+            file_name=f"{model_key}_{co['name'].replace(' ','_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"dl_guided_{model_key}",
+        )
+    with col_b:
+        adv_buf = make_model_excel_advanced(model_key, co)
+        st.download_button(
+            f"🎯  Advanced Modeling  —  {co['name']}",
+            adv_buf,
+            file_name=f"{model_key}_{co['name'].replace(' ','_')}_advanced.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key=f"dl_adv_{model_key}",
+        )
+    st.markdown(
+        f'<div style="font-size:.78rem;color:#4B5563;padding:5px 0 10px;">'
+        f'<b>Excel Template:</b> {sheet_desc} &nbsp;·&nbsp; '
+        f'<b style="color:#1D4ED8;">■</b> Blue = given input &nbsp;·&nbsp; '
+        f'<span style="background:#FFFBEB;padding:0 4px;border:1px solid #FDE68A;">Yellow</span>'
+        f' = write your formula &nbsp;|&nbsp; '
+        f'<b>Advanced:</b> Complete reference + blank workspace — no structure provided, start from scratch.</div>',
+        unsafe_allow_html=True)
+    st.markdown("---")
 
 
 # ── Module header ──────────────────────────────────────────────────────────────
@@ -1065,115 +2154,35 @@ The CFS is structured in three sections: Operating Activities, Investing Activit
         st.markdown("Three sections — one per statement. Type labels in col A, values or formulas in col B. "
                     "Formulas starting with **=** evaluate live. The guidance panel on the left of each section gives you hints without giving away the answer.")
 
-        # ── IS ──
-        formula_grid_section("3s_is", "Income Statement (IS tab)", [
-            "What is the very first number on any income statement — the amount a company earns from its core business before any costs are subtracted? Find it in the given inputs.",
-            "What is the direct cost of producing what the company sold? Unlike overhead, this scales with sales volume. Find it in the inputs.",
-            "After subtracting production costs from the top line, what remains? This is your first profitability subtotal — the spread between what you charge and what it costs to make.",
-            "What are the fixed operating costs that run the business day-to-day — rent, executive salaries, marketing — separate from production costs? Find this in the inputs.",
-            "After subtracting those fixed overhead costs from your first subtotal, what remains? This is the operating metric private equity firms and bankers focus on most — before non-cash charges, financing, and taxes.",
-            "There is a non-cash charge that reduces taxable income on paper but involves no actual cash outflow — it represents assets 'aging' over time. Enter it from inputs. Note this row number; the cash flow section will reference it.",
-            "After deducting that non-cash aging charge from the previous subtotal, what is the true operating profit? This is the last subtotal before financing costs and taxes enter the picture.",
-            "The company borrowed money. What is the annual cost of carrying that debt? This is a financing decision, not an operating one — and the sign matters.",
-            "After paying interest to lenders, what profit remains before the government's share is deducted? This is your pre-tax subtotal.",
-            "Enter this percentage as a decimal and store it in its own dedicated cell. Why is it dangerous to embed a rate directly inside a formula instead of referencing a standalone cell?",
-            "Apply the rate from the row above to the pre-tax profit. Are you referencing the rate cell, or did you accidentally type the number again?",
-            "After taxes, what remains? This is the final bottom line. Note its row number — the cash flow statement will link here using a cross-sheet reference.",
-            "Express the bottom line as a percentage of the top line. Is your result in the single-digit-to-low-teens range? If it is far off, check the formulas in the rows above.",
-        ], n_rows=13, section_name="IS", reveal_lines=[
-            "<b>Label:</b> Revenue &nbsp;|&nbsp; <b>Enter:</b> hard-code the revenue figure from inputs",
-            "<b>Label:</b> COGS &nbsp;|&nbsp; <b>Enter:</b> hard-code cost of goods sold from inputs",
-            "<b>Label:</b> Gross Profit &nbsp;|&nbsp; <b>Formula:</b> =B1−B2 &nbsp;(Revenue minus COGS)",
-            "<b>Label:</b> SG&amp;A &nbsp;|&nbsp; <b>Enter:</b> hard-code selling, general &amp; admin costs from inputs",
-            "<b>Label:</b> EBITDA &nbsp;|&nbsp; <b>Formula:</b> =B3−B4 &nbsp;(Gross Profit minus SG&amp;A)",
-            "<b>Label:</b> D&amp;A &nbsp;|&nbsp; <b>Enter:</b> hard-code depreciation &amp; amortization from inputs",
-            "<b>Label:</b> EBIT &nbsp;|&nbsp; <b>Formula:</b> =B5−B6 &nbsp;(EBITDA minus D&amp;A)",
-            "<b>Label:</b> Interest Expense &nbsp;|&nbsp; <b>Enter:</b> hard-code interest expense from inputs",
-            "<b>Label:</b> EBT &nbsp;|&nbsp; <b>Formula:</b> =B7−B8 &nbsp;(EBIT minus Interest Expense)",
-            "<b>Label:</b> Tax Rate &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.30)",
-            "<b>Label:</b> Tax Expense &nbsp;|&nbsp; <b>Formula:</b> =B9*B10 &nbsp;(EBT × Tax Rate)",
-            "<b>Label:</b> Net Income &nbsp;|&nbsp; <b>Formula:</b> =B9−B11 &nbsp;(EBT minus Tax Expense)",
-            "<b>Label:</b> NI Margin &nbsp;|&nbsp; <b>Formula:</b> =B12/B1 &nbsp;(Net Income ÷ Revenue)",
-        ])
-
-        # ── BS ──
-        formula_grid_section("3s_bs", "Balance Sheet (BS tab)", [
-            "The most liquid asset goes first — it is immediately available to spend. Enter the opening balance from the given inputs.",
-            "The company recognized revenue but customers have not paid yet — the cash is still owed to the company. What do you call money customers owe? Enter from inputs. Why is this listed as an asset despite no cash arriving?",
-            "Goods were produced but have not been sold yet. What do you call unsold goods sitting in storage? Enter from inputs. How does this eventually convert to cash?",
-            "You now have three short-term asset rows. What is the umbrella term for assets that convert to cash within a year? Sum the three rows above.",
-            "The physical machinery and buildings that run the business, reduced by the depreciation charged against them over time. Enter from inputs.",
-            "Non-physical, long-lived assets: patents, trademarks, brand names, goodwill from acquisitions. Enter from inputs.",
-            "Sum every asset the company owns — both the short-term bucket and the two long-term lines. Note this row number: it must tie exactly to the total of the liabilities and equity section below.",
-            "— Leave blank as a visual separator between assets and liabilities.",
-            "The company received goods from suppliers but has not paid for them yet. What is the name for money owed to suppliers? Enter from inputs. Why is delaying payment beneficial for cash?",
-            "Debt that must be repaid within the next 12 months. Enter from inputs.",
-            "Debt that does not mature for more than a year. Enter from inputs.",
-            "Add everything the company owes — to suppliers, to short-term lenders, and to long-term lenders. Which rows above make up this total?",
-            "— Leave blank as a visual separator.",
-            "Capital raised by issuing shares to investors. This goes in the equity section — the residual claim shareholders hold after all liabilities are settled. Enter from inputs.",
-            "Profits earned over the company's life that were kept rather than paid as dividends. Each period's bottom-line earnings flow into this line. Enter from inputs.",
-            "Sum the two equity components above. This is the shareholders' total stake in the business.",
-            "Combine your two subtotals — everything owed and everything owned by shareholders. This must equal the total assets figure calculated above. Does it?",
-            "— Leave blank.",
-            "Write a formula that produces zero only when the model is correct. Subtract one major subtotal from the other — if the result is not zero, there is an error somewhere that must be found before this model can be used.",
-        ], n_rows=19, section_name="BS", reveal_lines=[
-            "<b>Label:</b> Cash &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Accounts Receivable &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Inventory &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Current Assets &nbsp;|&nbsp; <b>Formula:</b> =B1+B2+B3 &nbsp;(Cash + AR + Inventory)",
-            "<b>Label:</b> PP&amp;E, net &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Intangibles &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Total Assets &nbsp;|&nbsp; <b>Formula:</b> =B4+B5+B6 &nbsp;(Current Assets + PP&amp;E + Intangibles)",
-            "<i>Blank separator row — leave A and B empty</i>",
-            "<b>Label:</b> Accounts Payable &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Short-term Debt &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Long-term Debt &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Total Liabilities &nbsp;|&nbsp; <b>Formula:</b> =B9+B10+B11",
-            "<i>Blank separator row — leave A and B empty</i>",
-            "<b>Label:</b> Common Stock &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Retained Earnings &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Total Equity &nbsp;|&nbsp; <b>Formula:</b> =B14+B15",
-            "<b>Label:</b> Total L&amp;E &nbsp;|&nbsp; <b>Formula:</b> =B12+B16 &nbsp;(Total Liabilities + Total Equity)",
-            "<i>Blank separator row — leave A and B empty</i>",
-            "<b>Label:</b> Balance Check &nbsp;|&nbsp; <b>Formula:</b> =B7−B17 &nbsp;(must equal 0)",
-        ])
-
-        # ── CFS ── (reads from IS and BS via cross-section refs)
-        all_cells = _get_all_cells()
-        cfs_cross = {k: v for k, v in all_cells.items() if k in ("IS", "BS")}
-        formula_grid_section("3s_cfs", "Cash Flow Statement (CFS tab)", [
-            "The cash flow statement always starts with a figure pulled from a different statement. Which row on the income statement holds the final bottom line? Use a cross-sheet reference rather than typing the number.",
-            "One of the income statement charges reduced taxable income without any cash actually leaving the company. Since no cash went out, what must you do to reconcile income to cash? What sign does that adjustment carry here?",
-            "If money owed by customers grows from one period to the next, does that represent cash collected or cash still outstanding? Think: revenue recognized but not yet received — does that help or hurt your cash balance?",
-            "If unsold goods build up in the warehouse, cash was spent producing them. Does building up that stock help or hurt your cash position? What sign does growth in that asset carry on the cash flow statement?",
-            "If the company is paying suppliers more slowly — holding onto cash longer — is that favorable or unfavorable for cash? Which direction does growing supplier balances move this line?",
-            "You have five operating rows above this one. What function totals a range of cells? This subtotal is the single most important health metric in the model — a negative number here is a serious warning sign.",
-            "— Leave blank as a visual separator.",
-            "Buying equipment and property always flows cash out — it is never income. What is the specific term for this type of capital spending? What sign does an outflow carry?",
-            "For this model, capital spending is the only investing activity. Rather than repeating the number, how do you reference the row directly above this one?",
-            "— Leave blank as a visual separator.",
-            "Cash returned to shareholders always flows out. What sign does it carry in the model?",
-            "For this model, shareholder distributions are the only financing activity. Reference the row above rather than hardcoding the number.",
-            "— Leave blank.",
-            "Start from the opening cash balance and add the three section subtotals. Which three rows above combine with the beginning cash figure? And where does the ending balance appear on the balance sheet?",
-        ], n_rows=14, cross=cfs_cross, section_name="CFS", reveal_lines=[
-            "<b>Label:</b> Net Income &nbsp;|&nbsp; <b>Formula:</b> =IS!B12 &nbsp;(cross-sheet link from IS)",
-            "<b>Label:</b> Add: D&amp;A &nbsp;|&nbsp; <b>Formula:</b> =IS!B6 &nbsp;(add back; positive sign — no cash left)",
-            "<b>Label:</b> Δ Accounts Receivable &nbsp;|&nbsp; <b>Enter:</b> change in AR; growing AR is negative (cash not collected)",
-            "<b>Label:</b> Δ Inventory &nbsp;|&nbsp; <b>Enter:</b> change in Inventory; growing inventory is negative (cash spent)",
-            "<b>Label:</b> Δ Accounts Payable &nbsp;|&nbsp; <b>Enter:</b> change in AP; growing AP is positive (holding onto cash longer)",
-            "<b>Label:</b> Cash from Operations &nbsp;|&nbsp; <b>Formula:</b> =SUM(B1:B5)",
-            "<i>Blank separator — leave A and B empty</i>",
-            "<b>Label:</b> Capex &nbsp;|&nbsp; <b>Enter:</b> from inputs as a <i>negative</i> number (cash outflow)",
-            "<b>Label:</b> Cash from Investing &nbsp;|&nbsp; <b>Formula:</b> =B8 &nbsp;(reference Capex row)",
-            "<i>Blank separator — leave A and B empty</i>",
-            "<b>Label:</b> Dividends Paid &nbsp;|&nbsp; <b>Enter:</b> from inputs as a <i>negative</i> number",
-            "<b>Label:</b> Cash from Financing &nbsp;|&nbsp; <b>Formula:</b> =B11 &nbsp;(reference Dividends row)",
-            "<i>Blank separator — leave A and B empty</i>",
-            "<b>Label:</b> Ending Cash &nbsp;|&nbsp; <b>Formula:</b> =BS!B1+B6+B9+B12 &nbsp;(Beginning Cash + Ops + Investing + Financing)",
-        ])
-
+        _build_tab_header("3stmt", "Sheets: IS · BS · CFS — Complete (reference) + Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**IS — Revenue:** Hard-code from given inputs. Anchors every formula below it.",
+            "**IS — COGS:** Hard-code from inputs. Direct production cost; scales with revenue.",
+            "**IS — Gross Profit:** Formula `=B2-B3`. First profitability subtotal.",
+            "**IS — SG&A:** Hard-code from inputs. Fixed overhead, separate from production cost.",
+            "**IS — EBITDA:** Formula `=B4-B5`. Banker's key operating metric — before D&A, interest, taxes.",
+            "**IS — D&A:** Hard-code from inputs. Non-cash charge — CFS will add it back (no cash left the company).",
+            "**IS — EBIT:** Formula `=B6-B7`. Operating profit after asset aging.",
+            "**IS — Interest Expense:** Hard-code from inputs. Financing cost, not an operating item.",
+            "**IS — EBT:** Formula `=B8-B9`. Pre-tax earnings after all costs.",
+            "**IS — Tax Rate:** Hard-code as decimal (0.30). Always its own dedicated cell — never embed in a formula.",
+            "**IS — Tax Expense:** Formula `=B10*B11`. Reference the rate cell above.",
+            "**IS — Net Income:** Formula `=B10-B12`. Note this row number — CFS will cross-link here.",
+            "**IS — NI Margin:** Formula `=B13/B2`. Should be single-digit to low-teens percent.",
+            "**BS — Assets:** Cash, AR, Inventory are given. Current Assets = `=B2+B3+B4`. PP&E & Intangibles given. Total Assets = `=B5+B6+B7`.",
+            "**BS — Liabilities:** AP, ST Debt, LT Debt are given. Total Liabilities = `=B10+B11+B12`.",
+            "**BS — Equity:** Common Stock and Retained Earnings are given. Total Equity = `=B15+B16`. Total L&E = `=B13+B17`.",
+            "**BS — Balance Check:** Formula `=B8-B18` must equal zero. If not, find the error before using the model.",
+            "**CFS — Net Income:** Cross-sheet link from IS tab: `='IS'!B13`. In the Complete sheet we used `='IS — Complete'!B13`.",
+            "**CFS — Add: D&A:** Cross-sheet link from IS D&A row. Enter as positive — no cash left the company.",
+            "**CFS — Working Capital:** ΔAR growing = negative (cash not yet collected). ΔInventory growing = negative. ΔAP growing = positive (holding cash longer).",
+            "**CFS — Cash from Operations:** `=SUM(B3:B7)`. Most important health metric — negative here is a serious warning sign.",
+            "**CFS — Capex:** Enter as negative (cash outflow). Cash from Investing = `=B11`.",
+            "**CFS — Financing:** Dividends Paid as negative. Cash from Financing = `=B15`.",
+            "**CFS — Ending Cash:** `='BS'!B2+B8+B12+B16` — Beginning Cash + Ops + Investing + Financing. Should match BS Cash.",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # DCF MODEL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1224,71 +2233,21 @@ The TV must then be discounted to present value: PV of TV = TV / (1 + WACC)^5. T
         st.markdown("## Build the DCF Model")
         st.markdown("Three sections: assumptions (col B), 5-year projections (cols B–F per year), then terminal value and the bridge to share price.")
 
-        # ── Assumptions ──
-        formula_grid_section("dcf_assum", "Assumption Inputs", [
-            "The anchor for every projection formula below. Enter from inputs and note the row number — you will lock this reference with $ signs so it does not drift when formulas are dragged across columns.",
-            "Enter as a decimal. This is the annual compound rate applied to the base figure each year. Note the row — projections will reference it with a locked $ reference.",
-            "What fraction of each year's revenue becomes operating profit? Enter as a decimal. This margin multiplies against each projected year's revenue.",
-            "This non-cash charge scales with revenue in this simplified model. Enter as a decimal.",
-            "Capital expenditure as a fraction of revenue each year. Enter as a decimal. This reduces the free cash flow available for distribution.",
-            "The government's claim on pre-tax income. Enter as a decimal. Applied inside the free cash flow formula. Note this row.",
-            "The rate at which every future cash flow is discounted back to today's value. Enter as a decimal. Why does a higher rate here produce a lower implied valuation?",
-            "Long-run growth assumed after the projection period ends. Enter as a decimal. There is a hard mathematical constraint on how large this can be relative to another assumption — can you figure out what it is and why?",
-            "The company's total debt minus its cash on hand. Enter from inputs. This bridges from total business value down to what shareholders actually receive.",
-            "The last divisor in the model — it converts total equity value into a per-share price. Enter in millions.",
-        ], n_rows=10, section_name="DCF_ASSUM", reveal_lines=[
-            "<b>Label:</b> Base Revenue &nbsp;|&nbsp; <b>Enter:</b> hard-code revenue from inputs",
-            "<b>Label:</b> Revenue Growth Rate &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.08)",
-            "<b>Label:</b> EBITDA Margin &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.22)",
-            "<b>Label:</b> D&amp;A % of Revenue &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal",
-            "<b>Label:</b> Capex % of Revenue &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal",
-            "<b>Label:</b> Tax Rate &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.30)",
-            "<b>Label:</b> WACC &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.0935)",
-            "<b>Label:</b> Terminal Growth Rate &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal; <i>must be less than WACC</i>",
-            "<b>Label:</b> Net Debt &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Shares Outstanding &nbsp;|&nbsp; <b>Enter:</b> hard-code in millions from inputs",
-        ])
-
-        # ── Projections ──
-        dcf_assum_cells = _get_all_cells().get("DCF_ASSUM", {})
-        formula_grid_multicol("dcf_proj", "Five-Year Projections (Years 1 – 5)", [
-            "What grows at a compound rate from the base year? Each year's figure applies the growth assumption once more than the prior year. Think: base × (1 + rate) raised to which power for Year 1, for Year 2, and so on?",
-            "Each year's operating profit is a fixed percentage of that year's revenue. Which assumption row holds that margin? How do you multiply this year's revenue figure by it?",
-            "Simplified free cash flow: operating profit after taxes, minus capital spending. Which assumption rows hold the tax rate and capex percentage? How do they combine with this year's operating profit?",
-            "This factor converts a future dollar to today's value using the discount rate. How does the exponent change from Year 1 to Year 5? Think: one divided by (1 + rate) raised to what power for each year?",
-            "Bring the free cash flow to present value using two numbers from the same column. Which row holds the cash flow, and which row holds the discount factor? How do they combine?",
-        ], n_rows=5, col_labels=["Yr 1 (B)","Yr 2 (C)","Yr 3 (D)","Yr 4 (E)","Yr 5 (F)"],
-        seed=dcf_assum_cells, section_name="DCF_PROJ", reveal_lines=[
-            "<b>Label:</b> Revenue &nbsp;|&nbsp; <b>Formula (Yr n):</b> =$B$1*(1+$B$2)^n &nbsp;(lock base &amp; rate with $)",
-            "<b>Label:</b> EBITDA &nbsp;|&nbsp; <b>Formula:</b> =Revenue_this_year * $B$3",
-            "<b>Label:</b> Free Cash Flow &nbsp;|&nbsp; <b>Formula:</b> =EBITDA*(1−$B$6) − (Revenue*$B$5)",
-            "<b>Label:</b> Discount Factor &nbsp;|&nbsp; <b>Formula (Yr n):</b> =1/(1+$B$7)^n",
-            "<b>Label:</b> PV of FCF &nbsp;|&nbsp; <b>Formula:</b> =FCF_this_col * DiscountFactor_this_col",
-        ])
-
-        # ── TV & Bridge ──
-        dcf_proj_cells = _get_all_cells().get("DCF_PROJ", {})
-        dcf_seed = {**dcf_assum_cells, **dcf_proj_cells}
-        formula_grid_section("dcf_bridge", "Terminal Value & Share Price Bridge", [
-            "Pull the final year's free cash flow from your projections. Which row and which column (Year 5) holds this figure?",
-            "This valuation component assumes the final year's cash flow grows at the long-run rate forever. The formula has three ingredients. Which two rates create the denominator, and why must one be strictly larger than the other?",
-            "The terminal value occurs at the end of Year 5, so it must be brought back to today's dollars. How many years do you discount it for, and which formula accomplishes that?",
-            "You have five years of discounted cash flows in the projections section. What function sums a range of cells?",
-            "Two components together make up the total business value from this model. What are they, and how do they combine?",
-            "Enter or reference from your assumptions. This is what goes to lenders before shareholders receive anything — why does that make it a subtraction from business value?",
-            "After debtholders are paid in full, what remains belongs to shareholders. Which two rows above combine to give you this?",
-            "The model's final output: value per share. Divide the equity value by what? Compare your answer to the current stock price in the given inputs — is it above or below?",
-        ], n_rows=8, seed=dcf_seed, reveal_lines=[
-            "<b>Label:</b> Year 5 FCF &nbsp;|&nbsp; <b>Enter:</b> reference FCF row, Year 5 column from projections",
-            "<b>Label:</b> Terminal Value &nbsp;|&nbsp; <b>Formula:</b> =B1*(1+g)/(WACC−g) &nbsp;where g = terminal growth rate",
-            "<b>Label:</b> PV of Terminal Value &nbsp;|&nbsp; <b>Formula:</b> =B2/(1+WACC)^5",
-            "<b>Label:</b> Sum of PV(FCFs) &nbsp;|&nbsp; <b>Formula:</b> =SUM of the 5 PV of FCF cells from projections",
-            "<b>Label:</b> Enterprise Value &nbsp;|&nbsp; <b>Formula:</b> =B3+B4 &nbsp;(PV of TV + Sum of PV FCFs)",
-            "<b>Label:</b> Net Debt &nbsp;|&nbsp; <b>Enter:</b> hard-code or reference from assumptions",
-            "<b>Label:</b> Equity Value &nbsp;|&nbsp; <b>Formula:</b> =B5−B6",
-            "<b>Label:</b> Implied Share Price &nbsp;|&nbsp; <b>Formula:</b> =B7/Shares_Outstanding",
-        ])
-
+        _build_tab_header("dcf", "Sheets: DCF — Complete (reference) + DCF — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Assumptions block (col B):** Enter Base Revenue, Revenue Growth %, EBITDA Margin %, D&A % Rev, Capex % Rev, Tax Rate, WACC, Terminal g, Net Debt, Shares Out. — all from given inputs. Store each in its own cell.",
+            "**Projections — Revenue (row 16, cols C–G):** `=$B$4*(1+$B$5)^n` where n=1 for Yr1, 2 for Yr2, etc. The $ locks prevent the reference from shifting when you drag right.",
+            "**Projections — EBITDA (row 17):** `=C16*$B$6` — Revenue × EBITDA Margin. Lock the margin reference with $.",
+            "**Projections — Free Cash Flow (row 18):** `=C17*(1-$B$9)-C16*$B$8` — EBITDA×(1-tax) minus Capex. FCF is what gets discounted.",
+            "**Projections — Discount Factor (row 19):** `=1/(1+$B$10)^n` — one divided by (1+WACC) raised to the year number.",
+            "**Projections — PV of FCF (row 20):** `=C18*C19` — FCF × Discount Factor. Repeat for all 5 years.",
+            "**Terminal Value:** `=B23*(1+B11)/(B10-B11)` — Year 5 FCF × (1+g) ÷ (WACC−g). g MUST be less than WACC or the formula produces infinite value.",
+            "**PV of Terminal Value:** `=B24/(1+B10)^5` — discount the terminal value back 5 years.",
+            "**Enterprise Value:** Sum of PV(FCFs) + PV(TV). PV(FCFs) = `=SUM(C20:G20)`.",
+            "**Bridge to Share Price:** EV − Net Debt = Equity Value. Equity Value ÷ Shares Outstanding = Implied Share Price. Compare to the given current stock price.",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # COMPS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1328,46 +2287,16 @@ The summary block uses Excel statistical functions: =MEDIAN(range) and =PERCENTI
                     "**CloudSystems** EV 1,260 · EBITDA 120 · Rev 400 · NI 59 · MktCap 1,239 | "
                     "**InfoPro** EV 858 · EBITDA 110 · Rev 510 · NI 54 · MktCap 853")
 
-        formula_grid_section("comps_peers", "Peer Table — Raw Data & Multiples", [
-            "Before entering any data, think about what this table needs to show. You are tracking company names, key financial metrics, and derived ratios. What ratios do bankers use most commonly to compare total business value to earnings power and to revenue? Think about what the numerator and denominator of each ratio represent.",
-            "Enter all raw data for the first peer. Multiples are always derived — never typed. If you know a company's total business value and what it earns before interest, taxes, D&A — how do you turn those two numbers into a ratio?",
-            "Same structure as the row above. Once the ratio formulas in the first data row are correct, what is the most efficient way to apply the same logic to this peer without rewriting the formulas?",
-            "Third peer, same structure. Notice that some companies trade at higher ratios. What fundamental business characteristics — margins, growth, competitive position — might explain a premium?",
-            "Last peer. You now have four data points for each metric. What patterns do you notice in how the ratios compare across the group?",
-            "— Leave blank as a visual separator before the summary statistics.",
-            "The low end of the peer distribution. There is an Excel function that returns a value at a specific rank in a range. What argument do you pass to get the 25th percentile, expressed as a decimal?",
-            "The midpoint of the peer set. Why is this statistic preferred over the average when summarizing valuation ratios? What problem does it avoid?",
-            "The high end of the range. Together with the low end and midpoint, these three rows give a valuation range — not a single point. Why is a range more useful to a banker than a single number?",
-            "Apply the midpoint logic to the ratio that relates market price to per-share earnings. This gives a separate equity-value check using the net income line.",
-        ], n_rows=10, section_name="COMPS_PEERS", reveal_lines=[
-            "<b>Header row</b> — labels: Company | EV | EBITDA | Revenue | Net Income | Mkt Cap | EV/EBITDA | EV/Revenue | P/E",
-            "<b>Label:</b> TechAlpha &nbsp;|&nbsp; raw data from above; <b>EV/EBITDA</b> =EV÷EBITDA; <b>EV/Rev</b> =EV÷Revenue; <b>P/E</b> =MktCap÷NI",
-            "<b>Label:</b> DataCore &nbsp;|&nbsp; same structure — copy ratio formulas from the row above",
-            "<b>Label:</b> CloudSystems &nbsp;|&nbsp; same structure",
-            "<b>Label:</b> InfoPro &nbsp;|&nbsp; same structure",
-            "<i>Blank separator — leave A and B empty</i>",
-            "<b>Label:</b> 25th Percentile &nbsp;|&nbsp; <b>Formula:</b> =PERCENTILE(EV/EBITDA range, 0.25) &nbsp;repeat for each multiple",
-            "<b>Label:</b> Median &nbsp;|&nbsp; <b>Formula:</b> =MEDIAN(EV/EBITDA range) &nbsp;repeat for each multiple",
-            "<b>Label:</b> 75th Percentile &nbsp;|&nbsp; <b>Formula:</b> =PERCENTILE(EV/EBITDA range, 0.75)",
-            "<b>Label:</b> Median P/E &nbsp;|&nbsp; <b>Formula:</b> =MEDIAN(P/E range)",
-        ])
-
-        formula_grid_section("comps_val", "NovaTech Implied Valuation", [
-            "Enter from the given inputs — this is the financial metric you are applying the peer ratio to.",
-            "Do not retype this — reference it from the peer table you just built. Which row holds the midpoint of the peer ratios?",
-            "You know what the peer set pays per dollar of this earnings metric, and you know NovaTech's figure. How do you work backward to an implied total business value?",
-            "Enter from the given inputs. Why does subtracting this convert a total business value into what shareholders actually receive?",
-            "After paying off lenders, what remains belongs to shareholders. Which two rows above combine to give you this?",
-            "Divide the equity value into a per-share amount. By what divisor? Is NovaTech cheap or expensive relative to peers based on this implied price?",
-        ], n_rows=6, seed=_get_all_cells().get("COMPS_PEERS", {}), reveal_lines=[
-            "<b>Label:</b> NovaTech EBITDA &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Median EV/EBITDA &nbsp;|&nbsp; <b>Enter:</b> reference the Median row from the peer table above",
-            "<b>Label:</b> Implied EV &nbsp;|&nbsp; <b>Formula:</b> =B1*B2 &nbsp;(EBITDA × Median Multiple)",
-            "<b>Label:</b> Net Debt &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Equity Value &nbsp;|&nbsp; <b>Formula:</b> =B3−B4",
-            "<b>Label:</b> Implied Share Price &nbsp;|&nbsp; <b>Formula:</b> =B5÷Shares Outstanding",
-        ])
-
+        _build_tab_header("comps", "Sheets: Comps — Complete (reference) + Comps — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Peer table headers (row 1):** Company · EV · EBITDA · Revenue · Net Income · Mkt Cap · EV/EBITDA · EV/Revenue. Columns for raw data first, then derived multiples.",
+            "**Peer data rows 2–5:** Enter all raw data (EV, EBITDA, Revenue, NI, Mkt Cap) as blue given inputs. EV/EBITDA = `=B2/C2`. EV/Revenue = `=B2/D2`. Copy formulas down.",
+            "**Statistics block:** 25th Percentile = `=PERCENTILE(G2:G5,0.25)`. Median = `=MEDIAN(G2:G5)`. 75th Pctile = `=PERCENTILE(G2:G5,0.75)`. Repeat for EV/Revenue column.",
+            "**Implied Valuation:** Enter subject company EBITDA (given). Reference Median EV/EBITDA from stats block (do not retype). Implied EV = EBITDA × Median multiple.",
+            "**Bridge to share price:** Implied EV − Net Debt = Equity Value. Equity Value ÷ Shares Out = Implied Share Price. Compare to current price — is the stock cheap or expensive vs. peers?",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # PRECEDENT TRANSACTIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1398,42 +2327,16 @@ When an acquirer buys a company, they're buying control of the entire enterprise
                     "**MegaCorp/DataCore '21** Deal EV 980 · LTM EBITDA 100 · Pre-deal MktCap 809 | "
                     "**GlobalTech/InfoPro '23** Deal EV 1,045 · LTM EBITDA 110 · Pre-deal MktCap 856")
 
-        formula_grid_section("prec_deals", "Deal Table — Raw Data & Derived Metrics", [
-            "Before entering any data, think about what columns this table needs. You are tracking completed acquisitions, not just stock prices. What extra information does a deal table capture that a trading comps table does not? Think about what a buyer paid versus what the target's shares were trading at before the deal.",
-            "Enter the raw deal data for the first transaction. The earnings multiple is always derived. The second derived column captures how much above the pre-deal market value the buyer paid — how do you express that difference as a percentage?",
-            "Same structure. Once the formulas in the row above are correct, how do you efficiently apply the same logic to this deal?",
-            "Third deal. Compare the derived multiples to those in your trading comps. Do you observe a consistent pattern? What economic concept explains the difference?",
-            "— Leave blank as a separator before summary statistics.",
-            "Find the midpoint of the three deal multiples. Why should this be higher than the trading comps midpoint? What premium does it reflect?",
-            "Find the average premium across all three deals. What does the typical acquisition premium range tell you about why buyers must pay more than the current market price?",
-            "Apply the average premium to NovaTech's current stock price. This is the minimum offer price any acquirer must put on the table to convince shareholders to sell. How do you calculate it?",
-            "— Leave blank.",
-        ], n_rows=9, section_name="PREC_DEALS", reveal_lines=[
-            "<b>Header row</b> — labels: Deal | Year | Deal EV | LTM EBITDA | EV/EBITDA | Pre-deal Mkt Cap | Control Premium %",
-            "<b>Label:</b> AcquireCo/TechAlpha '22 &nbsp;|&nbsp; <b>EV/EBITDA</b> =Deal EV÷LTM EBITDA; <b>Premium</b> =(Deal EV−Pre-deal Cap)÷Pre-deal Cap",
-            "<b>Label:</b> MegaCorp/DataCore '21 &nbsp;|&nbsp; same formulas — copy from row above",
-            "<b>Label:</b> GlobalTech/InfoPro '23 &nbsp;|&nbsp; same formulas",
-            "<i>Blank separator — leave A and B empty</i>",
-            "<b>Label:</b> Median EV/EBITDA &nbsp;|&nbsp; <b>Formula:</b> =MEDIAN(EV/EBITDA range)",
-            "<b>Label:</b> Avg Control Premium &nbsp;|&nbsp; <b>Formula:</b> =AVERAGE(premium range)",
-            "<b>Label:</b> NovaTech Floor Price &nbsp;|&nbsp; <b>Formula:</b> =Current price × (1 + Avg Premium)",
-            "<i>Blank separator — leave A and B empty</i>",
-        ])
-
-        formula_grid_section("prec_val", "NovaTech Implied EV Valuation", [
-            "Enter from the given inputs. An acquirer is effectively paying a multiple of this earnings figure for the entire business.",
-            "Reference the midpoint from your deal table — do not retype it. It should be higher than the trading comps midpoint. Do you understand why?",
-            "If you know what acquirers historically paid per unit of this earnings metric, and you know NovaTech's figure, how do you calculate the implied total business value?",
-            "Subtract net borrowings from the total business value. Who gets paid before shareholders in any acquisition — and why does that make this a subtraction?",
-            "Divide equity value by shares outstanding. Is your answer higher than the comps-implied price? Can you explain the difference?",
-        ], n_rows=5, seed=_get_all_cells().get("PREC_DEALS", {}), reveal_lines=[
-            "<b>Label:</b> NovaTech EBITDA &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Median Deal Multiple &nbsp;|&nbsp; <b>Enter:</b> reference from deal table",
-            "<b>Label:</b> Implied EV &nbsp;|&nbsp; <b>Formula:</b> =B1*B2",
-            "<b>Label:</b> Equity Value &nbsp;|&nbsp; <b>Formula:</b> =B3−Net Debt (from inputs)",
-            "<b>Label:</b> Implied Per-Share Price &nbsp;|&nbsp; <b>Formula:</b> =B4÷Shares Outstanding",
-        ])
-
+        _build_tab_header("precedent", "Sheets: Precedent — Complete (reference) + Precedent — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Deal table headers (row 1):** Deal · Year · Deal EV · LTM EBITDA · EV/EBITDA · Pre-deal Mkt Cap. The control premium column captures the takeover premium paid.",
+            "**Deal data rows 2–4:** Enter Deal EV, LTM EBITDA, Pre-deal Mkt Cap as given. EV/EBITDA = Deal EV ÷ LTM EBITDA. These multiples should be 10–35% higher than trading comps — that's the control premium.",
+            "**Statistics:** Median EV/EBITDA = `=MEDIAN(E2:E4)`. Compare to your comps median — precedents should be higher.",
+            "**Implied Valuation:** Subject EBITDA × Median Deal Multiple = Implied EV. Then EV − Net Debt ÷ Shares = Implied Share Price.",
+            "**Key distinction:** These are ACQUISITION multiples (control premium included), not trading multiples. A company's acquisition floor price is always above its trading price.",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # LBO
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1470,66 +2373,19 @@ Why leverage? Because it amplifies returns on equity invested. If you buy a $1,0
     with build_tab:
         st.markdown("## Build the LBO Model")
 
-        formula_grid_section("lbo_su", "Sources & Uses", [
-            "Enter from the given inputs — this single earnings figure drives every other number in the deal. Why do LBO models start with this metric rather than revenue or net income?",
-            "Enter from the given inputs. The PE firm is paying this many times the earnings figure for the whole business. Why do LBO deals use this type of multiple rather than a price-to-earnings ratio?",
-            "The total purchase price for the business. Multiply the two rows above. This is the amount that must be financed.",
-            "Most of the purchase price is borrowed money. At 60%, how much of the total deal value does that represent? Why does leverage amplify equity returns if the business performs well?",
-            "The PE firm contributes the remaining 40% from its own capital. MOIC and IRR measure returns against this number — not the full purchase price. Why does that matter?",
-            "The two funding sources must add up to exactly the total cost. Does the sum of debt and equity equal the purchase price? If not, find the error.",
-            "— Leave blank.",
-        ], n_rows=7, section_name="LBO_SU", reveal_lines=[
-            "<b>Label:</b> LTM EBITDA &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Entry Multiple &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Entry EV &nbsp;|&nbsp; <b>Formula:</b> =B1*B2",
-            "<b>Label:</b> Debt (60%) &nbsp;|&nbsp; <b>Formula:</b> =B3*0.60",
-            "<b>Label:</b> PE Equity (40%) &nbsp;|&nbsp; <b>Formula:</b> =B3*0.40",
-            "<b>Label:</b> Sources Check &nbsp;|&nbsp; <b>Formula:</b> =B4+B5 &nbsp;(should equal B3)",
-            "<i>Blank separator — leave A and B empty</i>",
-        ])
-
-        lbo_su_cells = _get_all_cells().get("LBO_SU", {})
-        formula_grid_multicol("lbo_debt", "Debt Schedule (Years 1 – 5)", [
-            "Year 1 links from the financing section you built. Years 2 through 5 each take their opening balance from where the prior year ended. Why is this rolling structure important for tracking how debt falls over time?",
-            "The annual cost of carrying the outstanding loan. Apply the interest rate from inputs to the balance at the start of the year. Should you use the opening or closing balance — and why?",
-            "The company's earnings grow at a fixed annual rate. How do you express compound growth mathematically? What is the formula for Year 3 if you start at a base and grow at rate r each year?",
-            "Simplified available cash after tax and capital costs — this is what goes toward repaying the lender each year. Which inputs determine how much tax and capex eat into operating earnings?",
-            "After applying available cash to the outstanding loan, what balance remains? Watch this number fall each year — that decline is the deleveraging that drives private equity returns.",
-            "If exit value is based on a multiple of Year 5 earnings, and debt has been substantially paid down, how does equity value change? What is the formula if you were to compute it for each year?",
-        ], n_rows=6, col_labels=["Yr 1 (B)","Yr 2 (C)","Yr 3 (D)","Yr 4 (E)","Yr 5 (F)"],
-        seed=lbo_su_cells, section_name="LBO_DEBT", reveal_lines=[
-            "<b>Label:</b> Beginning Debt &nbsp;|&nbsp; Yr1: reference PE Debt from S&amp;U; Yr2+: =prior year's Ending Debt",
-            "<b>Label:</b> Interest Expense &nbsp;|&nbsp; <b>Formula:</b> =Beginning Debt × Interest Rate (from inputs)",
-            "<b>Label:</b> EBITDA &nbsp;|&nbsp; <b>Formula (Yr n):</b> =Entry EBITDA × (1+growth rate)^n",
-            "<b>Label:</b> FCF for Paydown &nbsp;|&nbsp; <b>Formula:</b> =EBITDA*(1−tax rate) − Capex (from inputs)",
-            "<b>Label:</b> Ending Debt &nbsp;|&nbsp; <b>Formula:</b> =Beginning Debt − FCF for Paydown",
-            "<b>Label:</b> Equity Value Preview &nbsp;|&nbsp; <b>Formula:</b> =(Exit Multiple × EBITDA) − Ending Debt",
-        ])
-
-        lbo_debt_cells = _get_all_cells().get("LBO_DEBT", {})
-        lbo_seed = {**lbo_su_cells, **lbo_debt_cells}
-        formula_grid_section("lbo_exit", "Exit & Returns", [
-            "Conservative base case: set this equal to what was paid at entry. Why do bankers resist assuming the exit ratio will be higher — and what does that constraint imply about where returns must actually come from?",
-            "Compound the entry earnings figure at the given growth rate for 5 years. What exponent do you use? How does compounding for 5 periods differ from simply multiplying by 5?",
-            "Multiply the two rows above. This is the implied sale price when the fund exits. Which rows, and what operation?",
-            "Pull from your debt schedule — the balance at the end of Year 5. How much of the original loan is still outstanding after 5 years of paydown?",
-            "After paying off lenders at exit, what remains for the fund? Sale proceeds minus what?",
-            "Reference from your financing section — do not retype. Why does retyping a number from another section create model risk?",
-            "How much did the fund multiply its money? Express as a ratio: what you receive divided by what you invested. What is the typical target for an institutional PE fund?",
-            "To calculate annualized return, you need a cash flow timeline: negative investment at Year 0, no cash flows in between, and positive exit proceeds at Year 5. Build that row now.",
-            "Apply the IRR function to the cash flow row above. What annualized rate does the fund earn? Is it above the 20% institutional benchmark?",
-        ], n_rows=9, seed=lbo_seed, reveal_lines=[
-            "<b>Label:</b> Exit Multiple &nbsp;|&nbsp; <b>Enter:</b> same as entry multiple (base case = no expansion)",
-            "<b>Label:</b> Year 5 EBITDA &nbsp;|&nbsp; <b>Formula:</b> =Entry EBITDA*(1+growth rate)^5",
-            "<b>Label:</b> Exit EV &nbsp;|&nbsp; <b>Formula:</b> =B1*B2 &nbsp;(Exit Multiple × Year 5 EBITDA)",
-            "<b>Label:</b> Remaining Debt &nbsp;|&nbsp; <b>Enter:</b> reference Year 5 Ending Debt from debt schedule",
-            "<b>Label:</b> Exit Equity &nbsp;|&nbsp; <b>Formula:</b> =B3−B4",
-            "<b>Label:</b> Entry Equity &nbsp;|&nbsp; <b>Enter:</b> reference PE Equity from S&amp;U section",
-            "<b>Label:</b> MOIC &nbsp;|&nbsp; <b>Formula:</b> =B5/B6 &nbsp;(Exit Equity ÷ Entry Equity)",
-            "<b>Label:</b> IRR Cash Flow Row &nbsp;|&nbsp; build row: [−Entry Equity, 0, 0, 0, 0, Exit Equity]",
-            "<b>Label:</b> IRR &nbsp;|&nbsp; <b>Formula:</b> =IRR(cash flow row above)",
-        ])
-
+        _build_tab_header("lbo", "Sheets: LBO — Complete (reference) + LBO — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Sources & Uses:** LTM EBITDA × Entry Multiple = Entry EV. Debt = EV × 60%. PE Equity = EV × 40%. Sources Check = Debt + Equity (must equal Entry EV).",
+            "**Debt Schedule — Beginning Debt (row 12):** Yr1 Beginning Debt = Entry Debt from S&U (`=B6`). Yr2+ Beginning Debt = prior year's Ending Debt. This rolling structure tracks deleveraging year by year.",
+            "**Debt Schedule — Interest (row 13):** Beginning Debt × Interest Rate (7%). Use the rate from inputs.",
+            "**Debt Schedule — EBITDA (row 14):** Entry EBITDA × (1+growth)^n — compound growth each year.",
+            "**Debt Schedule — FCF for Paydown (row 15):** EBITDA × (1-Tax) − Capex. This is the cash available to pay down debt.",
+            "**Debt Schedule — Ending Debt (row 16):** Beginning Debt − FCF for Paydown. Watch this fall each year — that's deleveraging.",
+            "**Exit & Returns:** Exit EV = Exit Multiple × Year 5 EBITDA. Exit Equity = Exit EV − Year 5 Remaining Debt. MOIC = Exit Equity ÷ Entry Equity.",
+            "**IRR:** Build a cash flow row: [−Entry Equity, 0, 0, 0, 0, Exit Equity]. Apply `=IRR(row)`. Above 20% is the institutional PE benchmark.",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # MERGER MODEL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1563,57 +2419,16 @@ In an all-stock deal, the acquirer issues new shares to pay for the target. This
     with build_tab:
         st.markdown("## Build the Merger Model")
 
-        formula_grid_section("merger_deal", "Deal Assumptions", [
-            "Enter from the given inputs — this is the target's stock price before any deal rumors reached the market. Why is the pre-rumor price used rather than today's price?",
-            "Enter from the given inputs as a decimal. Why must acquirers pay above market price — what are shareholders giving up by selling control?",
-            "What does each target shareholder actually receive per share? Work out the formula using the market price and the premium rate from the two rows above.",
-            "Enter from the given inputs. Combined with the per-share offer, this gives the total cost of acquiring the company.",
-            "The total consideration paid to target shareholders. Which two rows above multiply together to give you this?",
-            "Enter from the given inputs. In an all-stock deal, this is the currency NovaTech uses to pay — the higher it is, the fewer new shares must be created. Why does that matter?",
-            "In an all-stock deal, NovaTech issues its own shares to pay for the target. Total consideration divided by what price gives the number of new shares created?",
-            "How much do existing NovaTech shareholders get diluted? Express the new shares as a fraction of total shares after the deal closes.",
-        ], n_rows=8, section_name="MERGER_DEAL", reveal_lines=[
-            "<b>Label:</b> Target Market Price &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Acquisition Premium &nbsp;|&nbsp; <b>Enter:</b> hard-code as decimal (e.g. 0.25)",
-            "<b>Label:</b> Offer Price Per Share &nbsp;|&nbsp; <b>Formula:</b> =B1*(1+B2)",
-            "<b>Label:</b> Target Shares Outstanding &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Total Deal Value &nbsp;|&nbsp; <b>Formula:</b> =B3*B4",
-            "<b>Label:</b> NovaTech Share Price &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> New Shares Issued &nbsp;|&nbsp; <b>Formula:</b> =B5/B6",
-            "<b>Label:</b> Dilution % &nbsp;|&nbsp; <b>Formula:</b> =B7/(Existing Shares+B7)",
-        ])
-
-        formula_grid_section("merger_pf", "Pro Forma Income Statement", [
-            "Enter NovaTech's standalone bottom-line earnings from inputs — the baseline before any deal impact is considered.",
-            "Enter the target's standalone bottom-line earnings from inputs. Adding this is the primary financial benefit of combining the two companies.",
-            "Cost savings from eliminating duplicate operations, already net of taxes. Should this add to or subtract from combined earnings? Enter from inputs.",
-            "An accounting charge that arises when acquired intangible assets are written up to fair value and then amortized. Does this increase or decrease reported earnings? What sign does it carry? Enter from inputs.",
-            "Combine all four components — some add to earnings, some subtract. Which function handles a mix of positive and negative items across a range?",
-        ], n_rows=5, seed=_get_all_cells().get("MERGER_DEAL", {}), section_name="MERGER_PF", reveal_lines=[
-            "<b>Label:</b> Acquirer NI &nbsp;|&nbsp; <b>Enter:</b> NovaTech's net income from inputs (positive)",
-            "<b>Label:</b> Target NI &nbsp;|&nbsp; <b>Enter:</b> TargetCo's net income from inputs (positive)",
-            "<b>Label:</b> After-tax Synergies &nbsp;|&nbsp; <b>Enter:</b> from inputs as a positive number",
-            "<b>Label:</b> Intangibles Amortization &nbsp;|&nbsp; <b>Enter:</b> from inputs as a <i>negative</i> number",
-            "<b>Label:</b> Pro Forma NI &nbsp;|&nbsp; <b>Formula:</b> =SUM(B1:B4)",
-        ])
-
-        merger_seed = {**_get_all_cells().get("MERGER_DEAL", {}), **_get_all_cells().get("MERGER_PF", {})}
-        formula_grid_section("merger_eps", "EPS & Accretion / Dilution Test", [
-            "NovaTech's share count before any new shares are issued. Enter from inputs.",
-            "Reference from your deal assumptions section — do not retype it. Why does retyping a number from another section create model risk?",
-            "After the deal closes, total shares outstanding increases. Which two rows above combine to give you the new share count?",
-            "NovaTech's per-share earnings before the deal. Divide standalone earnings by standalone shares — this is the benchmark you are testing against.",
-            "The combined entity's per-share earnings after the deal. Divide combined earnings by combined shares. Compare carefully to the benchmark above.",
-            "Express the change in per-share earnings as a percentage. A positive result means the deal improved earnings per share. What do you call each outcome — and which outcome do boards prefer?",
-        ], n_rows=6, seed=merger_seed, reveal_lines=[
-            "<b>Label:</b> Standalone Shares &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> New Shares Issued &nbsp;|&nbsp; <b>Enter:</b> reference from Deal Assumptions section",
-            "<b>Label:</b> Pro Forma Shares &nbsp;|&nbsp; <b>Formula:</b> =B1+B2",
-            "<b>Label:</b> Standalone EPS &nbsp;|&nbsp; <b>Formula:</b> =Acquirer NI / B1",
-            "<b>Label:</b> Pro Forma EPS &nbsp;|&nbsp; <b>Formula:</b> =Pro Forma NI / B3",
-            "<b>Label:</b> Accretion/(Dilution) &nbsp;|&nbsp; <b>Formula:</b> =(B5−B4)/B4 &nbsp;(positive = accretive, negative = dilutive)",
-        ])
-
+        _build_tab_header("merger", "Sheets: Merger — Complete (reference) + Merger — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Deal Assumptions:** Target Market Price × (1 + Premium) = Offer Price/Share. Total Deal Value = Offer Price × Target Shares. New Shares Issued = Total Deal Value ÷ Acquirer Price.",
+            "**Pro Forma Income Statement:** Acquirer NI + Target NI + After-tax Synergies − Intangibles Amortization = Pro Forma NI. Synergies are positive; amortization is negative.",
+            "**EPS Test — Standalone EPS:** Acquirer NI ÷ Acquirer Shares. This is the benchmark you're testing against.",
+            "**EPS Test — Pro Forma EPS:** Pro Forma NI ÷ (Acquirer Shares + New Shares Issued). Compare to Standalone EPS.",
+            "**Accretion/Dilution:** `=(PF EPS − Standalone EPS) / Standalone EPS`. Positive = accretive (good). Negative = dilutive (management must explain why the deal is strategically worth the EPS hit).",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
 # ══════════════════════════════════════════════════════════════════════════════
 # BUDGET VS. ACTUAL
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1653,38 +2468,15 @@ Volume Effect + Price Effect = Total Revenue Variance. This is your built-in che
         st.markdown("## Build the Budget vs. Actual Model")
         st.markdown("Q1 data: Budget revenue $120M, actual $113M · Budget COGS $72M, actual $70.3M · Budget SG&A $20M, actual $21.5M")
 
-        formula_grid_section("bva_main", "Main Variance Table (cols A – F)", [
-            "Before entering any data, think about what a variance report must communicate. A manager needs to see what was planned, what actually happened, the gap in dollar terms, the gap in percentage terms, and whether each line is good or bad news. What columns does that imply — and does the ordering matter?",
-            "Enter planned and actual amounts for the top line from inputs. The dollar gap is always actual minus plan. For a revenue line, is a positive gap good or bad news? How would you encode that judgment in an IF formula?",
-            "Enter planned and actual for this cost line from inputs. Same dollar gap formula — but does the good/bad logic flip for a cost versus a revenue line? Why?",
-            "This line must never be typed — it must always be derived from the rows above. Budget column: subtract the cost from the revenue figure. Actual column: same operation using actual figures. Why does hardcoding this number break the model?",
-            "Enter planned and actual for this overhead line from inputs. Apply the same variance formula and the good/bad flag. You overspent here — what does the flag show?",
-            "Same rule as before — always a formula, never typed. Subtract the overhead line from the previous subtotal in each column. Notice: if revenue misses by about 6%, this subtotal misses by a much larger percentage. What causes that amplification?",
-            "Express this subtotal as a percentage of the top line for each column. What does the margin percentage reveal that the raw dollar variance alone does not show?",
-        ], n_rows=7, section_name="BVA_MAIN", reveal_lines=[
-            "<b>Header row</b> — labels: Line Item | Budget | Actual | Variance $ | Variance % | F/U",
-            "<b>Label:</b> Revenue &nbsp;|&nbsp; Budget &amp; Actual from inputs; <b>Var$</b> =Actual−Budget; <b>F/U</b> =IF(Var$≥0,\"F\",\"U\")",
-            "<b>Label:</b> COGS &nbsp;|&nbsp; Budget &amp; Actual from inputs; <b>F/U flips</b> =IF(Var$≤0,\"F\",\"U\") &nbsp;(lower cost = Favorable)",
-            "<b>Label:</b> Gross Profit &nbsp;|&nbsp; <i>Never type</i>; <b>Budget col</b> =Revenue_budget−COGS_budget; <b>Actual col</b> same",
-            "<b>Label:</b> SG&amp;A &nbsp;|&nbsp; Budget &amp; Actual from inputs; same F/U logic as COGS",
-            "<b>Label:</b> EBITDA &nbsp;|&nbsp; <i>Never type</i>; <b>Formula each col:</b> =GrossProfit_col−SGA_col",
-            "<b>Label:</b> EBITDA Margin &nbsp;|&nbsp; <b>Formula each col:</b> =EBITDA_col/Revenue_col",
-        ])
-
-        formula_grid_section("bva_decomp", "Volume / Price Revenue Decomposition", [
-            "Enter the planned unit volume from inputs.",
-            "Enter the actual unit volume from inputs. How many fewer units were sold than planned?",
-            "Enter the planned price per unit from inputs.",
-            "Enter the realized price per unit from inputs. Was the revenue miss driven by volume, price, or both?",
-            "Isolate the revenue impact of selling fewer units, holding price constant at the planned rate. If you sold fewer units than planned and value those lost units at the planned price — what is the formula?",
-            "Isolate the revenue impact of lower pricing, holding volume constant at actual. Every unit actually sold came in at a lower price than planned — how much revenue did that price difference cost?",
-            "Add the two effects above. This sum must exactly equal the total revenue variance from your main table. If it does not match, which formula is wrong?",
-        ], n_rows=7, reveal_lines=[
-            "<b>Label:</b> Budget Units &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Actual Units &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Budget Price/Unit &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Actual Price/Unit &nbsp;|&nbsp; <b>Enter:</b> hard-code from inputs",
-            "<b>Label:</b> Volume Effect &nbsp;|&nbsp; <b>Formula:</b> =(Actual Units − Budget Units) × Budget Price",
-            "<b>Label:</b> Price Effect &nbsp;|&nbsp; <b>Formula:</b> =Actual Units × (Actual Price − Budget Price)",
-            "<b>Label:</b> Check &nbsp;|&nbsp; <b>Formula:</b> =Volume Effect + Price Effect &nbsp;(must tie to Revenue Variance in main table)",
-        ])
+        _build_tab_header("budget", "Sheets: BvA — Complete (reference) + BvA — Practice (write your formulas)")
+        st.markdown("### Build Guidance")
+        for _i, _h in enumerate([
+            "**Main table headers:** Line Item · Budget · Actual · Variance $ · Variance % · F/U. One row per P&L line.",
+            "**Revenue row:** Budget and Actual are given (blue). Variance $ = `=Actual-Budget`. For revenue, positive = Favorable: `=IF(D2>=0,\"F\",\"U\")`.",
+            "**COGS row:** Given inputs. F/U logic FLIPS for costs: `=IF(D3<=0,\"F\",\"U\")` — lower cost = Favorable.",
+            "**Gross Profit row:** NEVER hard-code. Budget = `=B2-B3`. Actual = `=C2-C3`. Then apply Variance $ and F/U formulas.",
+            "**SG&A:** Given inputs. Same F/U flip as COGS. EBITDA: formula derived row, same as Gross Profit.",
+            "**EBITDA Margin:** `=EBITDA/Revenue` for each column. Notice: a ~6% revenue miss causes a much larger EBITDA % miss — fixed costs amplify the variance.",
+            "**Volume/Price Decomp:** Volume Effect = `=(Actual Units − Budget Units) × Budget Price`. Price Effect = `=Actual Units × (Actual Price − Budget Price)`. Sum must equal Revenue Variance $.",
+        ], 1):
+            st.markdown(f'<div class="guide-line"><span class="hint-num">{_i}.</span>{_h}</div>', unsafe_allow_html=True)
